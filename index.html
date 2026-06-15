@@ -38,8 +38,11 @@
     const data = document.getElementById('data-input').value;
     if (!data) return showToast('Selecione uma data', 'erro');
 
+    const fotoUrlUpload = await uploadFoto(data);
+    if (fotoUrlUpload) fotoUrl = fotoUrlUpload;
     const registro = coletarFormulario();
     registro.data = data;
+    registro.fotoUrl = fotoUrl || null;
     registro.feedback = calcularFeedback(registro);
 
     if (db) {
@@ -57,6 +60,7 @@
 
     mostrarFeedback(registro.feedback);
     carregarHistorico();
+    carregarDiasPiscina();
   };
 
   // ── CARREGAR DIA ──
@@ -107,11 +111,15 @@
     gerarPDF(registros, mes);
   };
 
+  window._getDocs = getDocs;
+  window._collection = collection;
+
   window.addEventListener('load', () => {
     const hoje = new Date().toISOString().split('T')[0];
     document.getElementById('data-input').value = hoje;
     carregarHistorico();
     mostrarDicaDoDia();
+    carregarDiasPiscina();
 
     // Ao mudar a data: carrega registro salvo ou rascunho
     document.getElementById('data-input').addEventListener('change', e => {
@@ -586,7 +594,6 @@ textarea { resize: vertical; min-height: 70px; }
     <div class="check-grid" id="check-positivos">
       <label class="check-item"><input type="checkbox" value="cha-alcachofra">🌿 Chá alcachofra</label>
       <label class="check-item"><input type="checkbox" value="academia">🏋️ Academia</label>
-      <label class="check-item"><input type="checkbox" value="piscina">🏊 Piscina</label>
       <label class="check-item"><input type="checkbox" value="massagem">👐 Massagem facial</label>
       <label class="check-item"><input type="checkbox" value="bom-sono">😴 Dormiu bem</label>
       <label class="check-item"><input type="checkbox" value="frutas-legumes">🥦 Frutas/legumes</label>
@@ -640,6 +647,40 @@ textarea { resize: vertical; min-height: 70px; }
 
     <label>Observação do cabelo</label>
     <textarea id="obs-cabelo" placeholder="Ex: brilhoso, opaco, seco atrás, com volume..."></textarea>
+  </div>
+
+  <!-- TRACKER PISCINA -->
+  <div class="card">
+    <div class="card-title">🏊 Nadou 45 min hoje?</div>
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+      <button id="btn-piscina" onclick="togglePiscina()" style="width:70px;height:70px;border-radius:50%;border:3px solid var(--border);background:var(--cream);font-size:30px;cursor:pointer;transition:all 0.2s;flex-shrink:0;">🏊</button>
+      <div>
+        <div id="piscina-status-txt" style="font-size:14px;font-weight:500;color:var(--muted);">Não nadou hoje</div>
+        <div id="piscina-mes-txt" style="font-size:12px;color:var(--calm);margin-top:2px;"></div>
+      </div>
+    </div>
+    <div id="piscina-dias-lista" style="font-size:11px;color:var(--muted);line-height:1.9;"></div>
+  </div>
+
+  <!-- FOTO DO DIA -->
+  <div class="card">
+    <div class="card-title">📸 Foto do rosto hoje</div>
+    <div id="foto-preview" style="display:none;margin-bottom:12px;">
+      <img id="foto-img" src="" style="width:100%;border-radius:12px;max-height:280px;object-fit:cover;">
+      <button onclick="removerFoto()" style="margin-top:8px;width:100%;padding:8px;border:1px solid var(--warn);border-radius:8px;background:none;color:var(--warn);font-size:12px;cursor:pointer;">Remover foto</button>
+    </div>
+    <div id="foto-upload-area" onclick="document.getElementById('foto-input').click()" style="border:2px dashed var(--border);border-radius:12px;padding:24px;text-align:center;cursor:pointer;transition:border-color 0.2s;">
+      <div style="font-size:32px;margin-bottom:8px;">📷</div>
+      <div style="font-size:13px;color:var(--muted);">Toque para tirar foto ou escolher da galeria</div>
+    </div>
+    <input type="file" id="foto-input" accept="image/*" capture="user" style="display:none;" onchange="previewFoto(this)">
+    <div id="foto-status" style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center;"></div>
+  </div>
+
+  <!-- ALGUMA NOVIDADE -->
+  <div class="card">
+    <div class="card-title">💬 Alguma novidade?</div>
+    <textarea id="novidade" placeholder="Ex: comecei a usar retinol, troquei o shampoo, fiz peeling, consultei dermatologista..."></textarea>
   </div>
 
   <!-- BOTÃO SALVAR -->
@@ -930,6 +971,37 @@ const DICAS = [
   {icon:'🌺',msg:'Aromaterapia não trata acne diretamente, mas pode reduzir o estresse que a piora. Difusor com lavanda ou bergamota no quarto antes de dormir é uma ferramenta legítima de manejo indireto.'},
   {icon:'🧬',msg:'Cada pessoa tem um microbioma cutâneo único. O que funciona para uma amiga pode não funcionar para você — e vice-versa. Seu diário é sua melhor ferramenta de personalização.'},
   {icon:'⏰',msg:'O hábito de anotar o protocolo diariamente transforma percepções subjetivas em dados objetivos. Em 90 dias, você terá evidência real do que funciona para a sua pele específica.'},
+  // BRONZEADO SAUDÁVEL
+  {icon:'🌊',msg:'Bronzeado duradouro começa com hidratação intensa. Pele bem hidratada distribui a melanina de forma mais uniforme e o bronze dura até 3x mais do que em pele seca.'},
+  {icon:'☀️',msg:'Os melhores horários para bronzear com menos dano são antes das 10h e depois das 16h. O UVA bronzeia ao longo do dia, mas o UVB que queima é mais intenso ao meio-dia.'},
+  {icon:'🧴',msg:'Protetor solar não impede o bronzeado — ele desacelera. FPS 30 ainda permite que a pele produza melanina, mas reduz queimaduras e manchas que arruínam o bronze a longo prazo.'},
+  {icon:'🏊',msg:'Nadar antes de tomar sol dilata os poros e prepara a pele para receber o bronze de forma mais uniforme. O movimento melhora a microcirculação, que apoia a produção de melanina.'},
+  {icon:'🥕',msg:'Betacaroteno (cenoura, manga, mamão, abóbora) consumido regularmente potencializa o bronzeado e dá tom dourado natural à pele mesmo sem exposição solar. Inclua diariamente.'},
+  {icon:'🍅',msg:'Licopeno do tomate cozido protege a pele de dentro contra radicais livres gerados pelo sol. Combine tomate cozido com azeite para maximizar a absorção.'},
+  {icon:'💧',msg:'Beba água extra nos dias de exposição solar — calor e suor aceleram a desidratação. Pele desidratada descasca mais rápido, levando o bronze junto.'},
+  {icon:'🌿',msg:'Após o sol, aplique aloe vera puro ou hidratante com centella asiática antes de dormir. Acalma a pele, reduz vermelhidão e fixa o bronze ao invés de deixar descamar.'},
+  {icon:'🛁',msg:'Banhos muito quentes após exposição solar aceleram a descamação e tiram o bronze. Prefira banhos mornos e curtos nos dias de piscina ou praia.'},
+  {icon:'🧴',msg:'Esfoliação leve 1-2 dias ANTES do sol remove células mortas e deixa o bronze mais uniforme. Nunca esfolie no mesmo dia ou logo após — a pele fica vulnerável.'},
+  {icon:'🌺',msg:'Óleo de cenoura diluído em jojoba ou coco aplicado após o banho intensifica o tom bronzeado naturalmente graças ao betacaroteno. Não substitui o protetor solar.'},
+  {icon:'⏱️',msg:'20-30 minutos de exposição solar diária produz vitamina D suficiente e inicia o bronzeado sem acumular dano excessivo. Mais tempo exige protetor para não somar dano UV.'},
+  {icon:'🔄',msg:'O bronze dura mais em pele hidratada diariamente. Manteiga de karité e óleos secos prolongam o bronze até uma semana a mais comparado à pele seca.'},
+  {icon:'🌞',msg:'A melanina produzida em um dia de sol leva 48-72h para aparecer completamente. O bronze imediato após o sol é de oxidação — o verdadeiro aparece depois.'},
+  {icon:'🍊',msg:'Vitamina C oral (500-1000mg/dia) protege contra dano oxidativo solar e apoia colágeno. Não impede o bronzeado, mas protege a qualidade da pele a longo prazo.'},
+  {icon:'🎯',msg:'Para bronzear sem manchar: use protetor de alta proteção nas manchas de acne ativas, enquanto o resto bronzeia normalmente. Proteção seletiva, não total.'},
+  {icon:'🌴',msg:'Areia reflete 17% da radiação UV e água reflete 22%. A exposição na beira da piscina é maior do que parece — reaplique o protetor independente de estar na sombra.'},
+  {icon:'💆',msg:'Massagem com óleo após o banho nos dias seguintes ao sol ativa a microcirculação e distribui melanina de forma mais uniforme, reduzindo manchas e desigualdade no tom.'},
+  {icon:'🌙',msg:'Dormir bem após exposição solar é quando a pele repara o DNA danificado pelo UV e consolida o bronzeado. Privação de sono acelera o descascamento e apaga o bronze.'},
+  {icon:'🏖️',msg:'Reaplique protetor a cada 2h de exposição real ao sol — não a cada 2h desde que saiu de casa. O cronômetro começa quando você chega ao sol.'},
+  {icon:'🥑',msg:'Gorduras boas (abacate, azeite, nozes) são essenciais para síntese de melanina e barreira cutânea. Dieta pobre em gordura boa resulta em pele seca que descasca o bronze rápido.'},
+  {icon:'🔆',msg:'Bronze no rosto com acne ativa: prefira chapéu e proteja o rosto, deixando o corpo bronzear. O sol resseca espinhas temporariamente mas estimula sebáceas depois.'},
+  {icon:'🌊',msg:'Água salgada tem ação adstringente e levemente antibacteriana. Nadar no mar pode melhorar a pele acneica temporariamente, mas lave o rosto logo após para remover o sal residual.'},
+  {icon:'⚡',msg:'Niacinamida em alta concentração inibe transferência de melanina — ajuda a clarear manchas, mas se o objetivo é bronzear uniformemente, evite nas áreas que quer bronzear.'},
+  {icon:'🌅',msg:'O bronze dura 7-14 dias em média, mas até 3 semanas com hidratação diária. Some quando as células bronzeadas descamam naturalmente no ciclo de 28 dias da pele.'},
+  {icon:'💛',msg:'Betacaroteno em excesso pode deixar a pele alaranjada nas palmas das mãos e pés (carotenodermia). Inofensivo e reversível, mas sinal de que a dose está alta demais.'},
+  {icon:'🏊',msg:'Óculos de sol com UV400 na piscina evitam franzir involuntariamente, prevenindo rugas de expressão ao redor dos olhos que se formam ao longo do tempo de exposição.'},
+  {icon:'🌿',msg:'Chá de rooibos rico em antioxidantes tem estudos preliminares de proteção contra dano UV. Sem cafeína, gostoso gelado — ótima opção de bebida nos dias de piscina.'},
+  {icon:'🩱',msg:'Para bronzeado uniforme no rosto: proteja olhos e bigode (que já recebem mais sol) e exponha mais o pescoço e mandíbula, que costumam ficar mais claros.'},
+  {icon:'🌊',msg:'Cabelo também sofre com o sol — o cloro da piscina mais UV é a combinação mais danosa para a fibra capilar. Leave-in UV antes de entrar protege cor, brilho e textura.'},
 ];
 
 let dicaAtual = new Date().getDate() % DICAS.length;
@@ -1069,6 +1141,8 @@ function coletarFormulario() {
     agua: waterCount,
     obsPele: document.getElementById('obs-pele').value,
     obsCabelo: document.getElementById('obs-cabelo').value,
+    novidade: document.getElementById('novidade').value,
+    piscinaHoje: piscinaHoje,
     timestamp: Date.now()
   };
 }
@@ -1116,6 +1190,10 @@ function preencherFormulario(r) {
   // obs
   document.getElementById('obs-pele').value = r.obsPele || '';
   document.getElementById('obs-cabelo').value = r.obsCabelo || '';
+  document.getElementById('novidade').value = r.novidade || '';
+  piscinaHoje = r.piscinaHoje || false;
+  if (piscinaHoje) togglePiscina(); else { piscinaHoje = false; const btn=document.getElementById('btn-piscina'); if(btn){btn.style.background='var(--cream)';btn.style.borderColor='var(--border)';btn.style.transform='scale(1)';document.getElementById('piscina-status-txt').style.color='var(--muted)';document.getElementById('piscina-status-txt').textContent='Não nadou hoje';} }
+  if (r.fotoUrl) { fotoUrl = r.fotoUrl; mostrarFotoSalva(r.fotoUrl); } else { removerFoto(); }
   // mostrar feedback
   if (r.feedback) mostrarFeedback(r.feedback);
 }
@@ -1147,7 +1225,8 @@ function calcularFeedback(r) {
 
   // positivos
   if (r.positivos.includes('cha-alcachofra')) { posScore += 10; posItems.push('Chá de alcachofra ✓'); }
-  if (r.positivos.includes('academia') || r.positivos.includes('piscina')) { posScore += 8; posItems.push('Exercício ✓'); }
+  if (r.positivos.includes('academia')) { posScore += 8; posItems.push('Academia ✓'); }
+  if (r.piscinaHoje) { posScore += 8; posItems.push('Nadou hoje 🏊 ✓'); }
   if (r.positivos.includes('massagem')) { posScore += 5; posItems.push('Massagem facial ✓'); }
   if (r.positivos.includes('bom-sono')) { posScore += 8; posItems.push('Boa noite de sono ✓'); }
   if (r.positivos.includes('frutas-legumes')) { posScore += 6; posItems.push('Frutas/legumes ✓'); }
@@ -1364,6 +1443,53 @@ function gerarPDF(registros, mes) {
   pdf.text(diagLines, M+2, y);
   y += diagLines.length * 5 + 8;
 
+  // EVOLUÇÃO FOTOGRÁFICA
+  const comFoto = registros.filter(r => r.fotoUrl);
+  if (comFoto.length > 0) {
+    pdf.addPage();
+    y = 20;
+    pdf.setFontSize(11);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(...hex2rgb('#C97B5A'));
+    pdf.text('Evolução da pele — fotos do mês', M, y);
+    y += 10;
+
+    const fotoW = (W - M*2 - 8) / 3;
+    const fotoH = fotoW * 1.2;
+
+    for (let i = 0; i < comFoto.length; i++) {
+      const col = i % 3;
+      const row = Math.floor(i / 3);
+      if (col === 0 && i > 0) y += fotoH + 14;
+      if (y + fotoH > 270) { pdf.addPage(); y = 20; }
+
+      const x = M + col * (fotoW + 4);
+      const r = comFoto[i];
+      const dataFmt = r.data.split('-').reverse().join('/');
+
+      try {
+        pdf.setFillColor(...hex2rgb('#F5EEE9'));
+        pdf.rect(x, y, fotoW, fotoH, 'F');
+
+        // Carregar imagem via proxy se possível
+        const imgData = await carregarImagemBase64(r.fotoUrl);
+        if (imgData) {
+          pdf.addImage(imgData, 'JPEG', x, y, fotoW, fotoH, undefined, 'FAST');
+        }
+      } catch(e) {
+        pdf.setFillColor(...hex2rgb('#F5EEE9'));
+        pdf.rect(x, y, fotoW, fotoH, 'F');
+      }
+
+      pdf.setFontSize(7);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(...hex2rgb('#9A7B6E'));
+      pdf.text(dataFmt, x + fotoW/2, y + fotoH + 4, { align: 'center' });
+      pdf.setTextColor(...hex2rgb('#5E9E8A'));
+      pdf.text(`${(r.feedback||{posPct:0}).posPct}%`, x + fotoW/2, y + fotoH + 9, { align: 'center' });
+    }
+  }
+
   // RODAPÉ
   pdf.setFontSize(7);
   pdf.setTextColor(...hex2rgb('#9A7B6E'));
@@ -1371,6 +1497,19 @@ function gerarPDF(registros, mes) {
 
   pdf.save(`diario-pele-${mes}.pdf`);
   showToast('📄 PDF gerado!');
+}
+
+async function carregarImagemBase64(url) {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch(e) { return null; }
 }
 
 // ══ LOCAL STORAGE ══
@@ -1388,6 +1527,130 @@ function carregarLocal(data) {
 function carregarTodosLocais() {
   const todos = JSON.parse(localStorage.getItem('diario_pele') || '{}');
   return Object.values(todos);
+}
+
+// ══ PISCINA TRACKER ══
+let piscinaHoje = false;
+
+function togglePiscina() {
+  piscinaHoje = !piscinaHoje;
+  const btn = document.getElementById('btn-piscina');
+  const txt = document.getElementById('piscina-status-txt');
+  if (piscinaHoje) {
+    btn.style.background = '#D4EAE4';
+    btn.style.borderColor = 'var(--calm)';
+    btn.style.transform = 'scale(1.1)';
+    txt.style.color = 'var(--calm)';
+    txt.textContent = '✅ Nadou hoje!';
+  } else {
+    btn.style.background = 'var(--cream)';
+    btn.style.borderColor = 'var(--border)';
+    btn.style.transform = 'scale(1)';
+    txt.style.color = 'var(--muted)';
+    txt.textContent = 'Não nadou hoje';
+  }
+  agendarRascunho();
+}
+
+async function carregarDiasPiscina() {
+  const now = new Date();
+  const mes = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  let dias = [];
+
+  if (typeof db !== 'undefined' && db) {
+    try {
+      const snap = await window._getDocs(window._collection(db, 'registros'));
+      snap.forEach(d => {
+        const data = d.data();
+        if (d.id.startsWith('caroline_' + mes) && data.piscinaHoje) {
+          dias.push(data.data);
+        }
+      });
+    } catch(e) {}
+  }
+
+  // também verifica local
+  const todos = carregarTodosLocais();
+  todos.forEach(r => {
+    if (r.data && r.data.startsWith(mes) && r.piscinaHoje && !dias.includes(r.data)) {
+      dias.push(r.data);
+    }
+  });
+
+  dias.sort();
+  const mesEl = document.getElementById('piscina-mes-txt');
+  const listaEl = document.getElementById('piscina-dias-lista');
+
+  if (dias.length === 0) {
+    mesEl.textContent = '0 vezes esse mês';
+    listaEl.textContent = '';
+  } else {
+    mesEl.textContent = `🏊 ${dias.length}x esse mês`;
+    listaEl.innerHTML = dias.map(d => {
+      const fmt = d.split('-').reverse().join('/');
+      return `🌊 ${fmt}`;
+    }).join('  ·  ');
+  }
+}
+
+// ══ CLOUDINARY ══
+const CLOUD_NAME = 'dp22uwwwd';
+const UPLOAD_PRESET = 'diario-pele';
+let fotoUrl = null;
+let fotoFile = null;
+
+function previewFoto(input) {
+  const file = input.files[0];
+  if (!file) return;
+  fotoFile = file;
+  const reader = new FileReader();
+  reader.onload = e => {
+    document.getElementById('foto-img').src = e.target.result;
+    document.getElementById('foto-preview').style.display = 'block';
+    document.getElementById('foto-upload-area').style.display = 'none';
+    document.getElementById('foto-status').textContent = '📷 Foto selecionada — será enviada ao salvar';
+    agendarRascunho();
+  };
+  reader.readAsDataURL(file);
+}
+
+function removerFoto() {
+  fotoFile = null;
+  fotoUrl = null;
+  document.getElementById('foto-img').src = '';
+  document.getElementById('foto-preview').style.display = 'none';
+  document.getElementById('foto-upload-area').style.display = 'block';
+  document.getElementById('foto-status').textContent = '';
+  document.getElementById('foto-input').value = '';
+}
+
+async function uploadFoto(data) {
+  if (!fotoFile) return null;
+  document.getElementById('foto-status').textContent = '⏳ Enviando foto...';
+  try {
+    const formData = new FormData();
+    formData.append('file', fotoFile);
+    formData.append('upload_preset', UPLOAD_PRESET);
+    formData.append('public_id', `caroline/${data}`);
+    formData.append('folder', 'pele-tips');
+    const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`, {
+      method: 'POST', body: formData
+    });
+    const json = await res.json();
+    document.getElementById('foto-status').textContent = '✓ Foto salva!';
+    return json.secure_url;
+  } catch(e) {
+    document.getElementById('foto-status').textContent = '⚠️ Erro ao enviar foto';
+    return null;
+  }
+}
+
+function mostrarFotoSalva(url) {
+  if (!url) return;
+  document.getElementById('foto-img').src = url;
+  document.getElementById('foto-preview').style.display = 'block';
+  document.getElementById('foto-upload-area').style.display = 'none';
+  fotoUrl = url;
 }
 
 // ══ TOAST ══
