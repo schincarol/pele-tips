@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diário da Pele</title>
+
+<!-- Firebase -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore, doc, setDoc, getDoc, collection, getDocs, query, where, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+  // ⚠️ SUBSTITUA PELOS SEUS DADOS DO FIREBASE (instruções no rodapé)
+  const firebaseConfig = {
+    apiKey: "AIzaSyC66C9sej7r9TwuM3I2thBEpy4RlZCaqP4",
+    authDomain: "diario-pele-tips.firebaseapp.com",
+    projectId: "diario-pele-tips",
+    storageBucket: "diario-pele-tips.firebasestorage.app",
+    messagingSenderId: "711630265932",
+    appId: "1:711630265932:web:4f70e8f832cf7eb8621ee9"
+  };
+
+  let db = null;
+  let USER_ID = "caroline"; // mude para seu nome se quiser
+
+  try {
+    const app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    document.getElementById('firebase-status').textContent = '🟢 Firebase conectado';
+    document.getElementById('firebase-status').style.color = '#5E9E8A';
+  } catch(e) {
+    document.getElementById('firebase-status').textContent = '🔴 Firebase não configurado — modo local ativo';
+    document.getElementById('firebase-status').style.color = '#D4724A';
+  }
+
+  // ── SALVAR REGISTRO ──
+  window.salvarRegistro = async function() {
+    const data = document.getElementById('data-input').value;
+    if (!data) return showToast('Selecione uma data', 'erro');
+
+    const registro = coletarFormulario();
+    registro.data = data;
+    registro.feedback = calcularFeedback(registro);
+
+    if (db) {
+      try {
+        await setDoc(doc(db, 'registros', `${USER_ID}_${data}`), registro);
+        showToast('✓ Salvo com sucesso!');
+      } catch(e) {
+        salvarLocal(data, registro);
+        showToast('Salvo localmente (Firebase erro)');
+      }
+    } else {
+      salvarLocal(data, registro);
+      showToast('✓ Salvo localmente');
+    }
+
+    mostrarFeedback(registro.feedback);
+    carregarHistorico();
+  };
+
+  // ── CARREGAR DIA ──
+  window.carregarDia = async function(data) {
+    let registro = null;
+    if (db) {
+      try {
+        const snap = await getDoc(doc(db, 'registros', `${USER_ID}_${data}`));
+        if (snap.exists()) registro = snap.data();
+      } catch(e) {}
+    }
+    if (!registro) registro = carregarLocal(data);
+    if (registro) preencherFormulario(registro);
+  };
+
+  // ── CARREGAR HISTÓRICO ──
+  window.carregarHistorico = async function() {
+    let registros = [];
+    if (db) {
+      try {
+        const snap = await getDocs(collection(db, 'registros'));
+        snap.forEach(d => { if (d.id.startsWith(USER_ID)) registros.push(d.data()); });
+      } catch(e) {}
+    }
+    if (!registros.length) registros = carregarTodosLocais();
+    renderHistorico(registros.sort((a,b) => b.data.localeCompare(a.data)));
+  };
+
+  // ── GERAR PDF MENSAL ──
+  window.gerarPDFMensal = async function() {
+    const mes = document.getElementById('mes-pdf').value;
+    if (!mes) return showToast('Selecione o mês', 'erro');
+
+    let registros = [];
+    if (db) {
+      try {
+        const snap = await getDocs(collection(db, 'registros'));
+        snap.forEach(d => { if (d.id.startsWith(USER_ID) && d.data().data && d.data().data.startsWith(mes)) registros.push(d.data()); });
+      } catch(e) {}
+    }
+    if (!registros.length) {
+      const todos = carregarTodosLocais();
+      registros = todos.filter(r => r.data && r.data.startsWith(mes));
+    }
+    if (!registros.length) return showToast('Nenhum registro neste mês', 'erro');
+    registros.sort((a,b) => a.data.localeCompare(b.data));
+    gerarPDF(registros, mes);
+  };
+
+  window.addEventListener('load', () => {
+    const hoje = new Date().toISOString().split('T')[0];
+    document.getElementById('data-input').value = hoje;
+    carregarHistorico();
+    document.getElementById('data-input').addEventListener('change', e => carregarDia(e.target.value));
+    mostrarDicaDoDia();
+  });
+</script>
+
+<!-- jsPDF -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+  --skin: #F2D4C2;
+  --blush: #C97B5A;
+  --deep: #3A1F14;
+  --calm: #5E9E8A;
+  --calm-light: #D4EAE4;
+  --cream: #FAF6F2;
+  --ink: #2C1810;
+  --muted: #9A7B6E;
+  --warn: #D4724A;
+  --good: #5E9E8A;
+  --white: #ffffff;
+  --border: #EDE0D8;
+  --card: #ffffff;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: var(--cream);
+  color: var(--ink);
+  min-height: 100vh;
+}
+
+/* HEADER */
+header {
+  background: var(--deep);
+  padding: 20px 24px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+header h1 {
+  font-family: 'Playfair Display', serif;
+  font-size: 22px;
+  color: var(--skin);
+  font-style: italic;
+}
+#firebase-status {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* NAV TABS */
+.tabs {
+  display: flex;
+  background: var(--white);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.tab-btn {
+  flex: 1;
+  padding: 13px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: all 0.2s;
+}
+.tab-btn.active {
+  color: var(--blush);
+  border-bottom-color: var(--blush);
+}
+
+/* VIEWS */
+.view { display: none; padding: 20px 16px 40px; max-width: 520px; margin: 0 auto; }
+.view.active { display: block; }
+
+/* CARDS */
+.card {
+  background: var(--card);
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+}
+.card-title {
+  font-family: 'Playfair Display', serif;
+  font-size: 16px;
+  color: var(--deep);
+  margin-bottom: 14px;
+}
+
+/* LABELS */
+label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+/* INPUTS */
+input[type="date"], input[type="text"], select, textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--cream);
+  outline: none;
+  transition: border 0.2s;
+  margin-bottom: 12px;
+}
+input:focus, select:focus, textarea:focus {
+  border-color: var(--blush);
+}
+textarea { resize: vertical; min-height: 70px; }
+
+/* RATING STARS */
+.rating-group { margin-bottom: 12px; }
+.stars { display: flex; gap: 6px; }
+.star {
+  font-size: 22px;
+  cursor: pointer;
+  opacity: 0.25;
+  transition: opacity 0.15s, transform 0.1s;
+  user-select: none;
+}
+.star.on { opacity: 1; }
+.star:hover { transform: scale(1.2); }
+
+/* CHECKBOXES */
+.check-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+  transition: all 0.15s;
+  background: var(--cream);
+}
+.check-item.selected {
+  background: var(--calm-light);
+  border-color: var(--calm);
+  color: var(--deep);
+}
+.check-item input { display: none; }
+
+/* WATER TRACKER */
+.water-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.water-btn {
+  font-size: 20px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  opacity: 0.25;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.water-btn.on { opacity: 1; }
+.water-btn:hover { transform: scale(1.2); }
+.water-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+
+/* THERMOMETERS */
+.thermo-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.thermo-box {
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+}
+.thermo-box.pos { background: #E8F5F1; }
+.thermo-box.neg { background: #FDF0EB; }
+.thermo-pct {
+  font-family: 'Playfair Display', serif;
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+.thermo-box.pos .thermo-pct { color: var(--good); }
+.thermo-box.neg .thermo-pct { color: var(--warn); }
+.thermo-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 10px; }
+.thermo-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.thermo-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+.thermo-box.pos .thermo-fill { background: var(--good); }
+.thermo-box.neg .thermo-fill { background: var(--warn); }
+.thermo-motivos { font-size: 10px; color: var(--muted); text-align: left; line-height: 1.5; }
+
+/* FEEDBACK BADGE */
+.feedback-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  margin: 2px 2px 2px 0;
+}
+.badge-pos { background: var(--calm-light); color: var(--calm); }
+.badge-neg { background: #FDEBD8; color: var(--warn); }
+
+/* BTN */
+.btn {
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  border: none;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+  letter-spacing: 0.02em;
+}
+.btn:hover { opacity: 0.88; }
+.btn:active { transform: scale(0.98); }
+.btn-primary { background: var(--deep); color: var(--skin); margin-bottom: 10px; }
+.btn-secondary { background: var(--blush); color: white; margin-bottom: 10px; }
+.btn-outline { background: transparent; color: var(--blush); border: 1.5px solid var(--blush); }
+
+/* HISTÓRICO */
+.hist-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--white);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.hist-item:hover { border-color: var(--blush); }
+.hist-date { font-size: 12px; font-weight: 600; color: var(--muted); min-width: 80px; }
+.hist-bars { flex: 1; }
+.hist-mini-bar { height: 5px; border-radius: 3px; margin-bottom: 3px; }
+.hist-score { font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700; }
+
+/* TOAST */
+#toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: var(--deep);
+  color: var(--skin);
+  padding: 10px 20px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: transform 0.3s ease;
+  z-index: 999;
+  white-space: nowrap;
+}
+#toast.show { transform: translateX(-50%) translateY(0); }
+#toast.erro { background: var(--warn); color: white; }
+
+/* PDF section */
+.pdf-section { background: var(--deep); border-radius: 16px; padding: 18px; margin-bottom: 14px; }
+.pdf-section label { color: var(--skin); opacity: 0.7; }
+.pdf-section input { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: white; }
+
+/* EMPTY STATE */
+.empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+.empty-icon { font-size: 48px; margin-bottom: 12px; }
+
+/* DICA DO DIA */
+.dica-banner {
+  background: linear-gradient(135deg, var(--deep) 0%, #5C3020 100%);
+  padding: 14px 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.dica-icon { font-size: 22px; flex-shrink: 0; margin-top: 1px; }
+.dica-text { flex: 1; }
+.dica-eyebrow {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--blush);
+  margin-bottom: 3px;
+}
+.dica-msg {
+  font-size: 13px;
+  color: var(--skin);
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+/* CAMPO OUTRO */
+.outro-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--blush);
+  user-select: none;
+}
+.outro-toggle:hover { opacity: 0.8; }
+.outro-fields {
+  display: none;
+  background: var(--cream);
+  border-radius: 10px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  margin-bottom: 12px;
+}
+.outro-fields.open { display: block; }
+.outro-fields input[type="text"] {
+  margin-bottom: 6px;
+}
+.outro-fields input[type="text"]:last-child {
+  margin-bottom: 0;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Diário da Pele</h1>
+  <span id="firebase-status" style="color:var(--muted);font-size:12px;">🔄 Conectando...</span>
+</header>
+
+<!-- DICA DO DIA -->
+<div class="dica-banner">
+  <div class="dica-icon" id="dica-icon">💡</div>
+  <div class="dica-text">
+    <div class="dica-eyebrow">Dica do dia</div>
+    <div class="dica-msg" id="dica-msg">Carregando dica...</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="showView('registrar', this)">✏️ Registrar</button>
+  <button class="tab-btn" onclick="showView('historico', this)">📅 Histórico</button>
+  <button class="tab-btn" onclick="showView('relatorio', this)">📊 Relatório</button>
+</div>
+
+<!-- ═══ VIEW: REGISTRAR ═══ -->
+<div id="view-registrar" class="view active">
+
+  <div class="card">
+    <div class="card-title">Qual dia você está registrando?</div>
+    <label>Data</label>
+    <input type="date" id="data-input">
+  </div>
+
+  <!-- PELE -->
+  <div class="card">
+    <div class="card-title">🧴 Pele hoje</div>
+
+    <label>Como está a pele? (1–5)</label>
+    <div class="rating-group">
+      <div class="stars" id="stars-pele" data-key="pele">
+        <span class="star" data-v="1">★</span>
+        <span class="star" data-v="2">★</span>
+        <span class="star" data-v="3">★</span>
+        <span class="star" data-v="4">★</span>
+        <span class="star" data-v="5">★</span>
+      </div>
+    </div>
+
+    <label>Manhã — o que usou?</label>
+    <div class="check-grid" id="check-manha">
+      <label class="check-item"><input type="checkbox" value="bioderma">💧 Bioderma</label>
+      <label class="check-item"><input type="checkbox" value="effaclar-gel">🟢 Effaclar gel</label>
+      <label class="check-item"><input type="checkbox" value="ciclapast">🤍 Ciclapast</label>
+      <label class="check-item"><input type="checkbox" value="episol">☀️ Protetor Episol</label>
+      <label class="check-item"><input type="checkbox" value="azelaico">✨ Ácido azelaico</label>
+      <label class="check-item"><input type="checkbox" value="teatree">🌿 Tea tree</label>
+    </div>
+    <div class="outro-toggle" onclick="toggleOutro('outro-manha')">＋ Adicionar outro produto da manhã</div>
+    <div class="outro-fields" id="outro-manha">
+      <input type="text" id="outro-manha-1" placeholder="Ex: niacinamida, vitamina C...">
+      <input type="text" id="outro-manha-2" placeholder="Mais um produto (opcional)">
+    </div>
+
+    <label>Noite — o que usou?</label>
+    <div class="check-grid" id="check-noite">
+      <label class="check-item"><input type="checkbox" value="bioderma">💧 Bioderma</label>
+      <label class="check-item"><input type="checkbox" value="effaclar-gel">🟢 Effaclar gel</label>
+      <label class="check-item"><input type="checkbox" value="effaclar-duo">🎯 Effaclar duo M</label>
+      <label class="check-item"><input type="checkbox" value="ciclapast">🤍 Ciclapast</label>
+      <label class="check-item"><input type="checkbox" value="azelaico">✨ Ácido azelaico</label>
+      <label class="check-item"><input type="checkbox" value="gelo-camomila">🧊 Gelo camomila</label>
+    </div>
+    <div class="outro-toggle" onclick="toggleOutro('outro-noite')">＋ Adicionar outro produto da noite</div>
+    <div class="outro-fields" id="outro-noite">
+      <input type="text" id="outro-noite-1" placeholder="Ex: retinol, sérum, máscara...">
+      <input type="text" id="outro-noite-2" placeholder="Mais um produto (opcional)">
+    </div>
+
+    <label>Gatilhos do dia</label>
+    <div class="check-grid" id="check-gatilhos">
+      <label class="check-item"><input type="checkbox" value="estresse">😰 Estresse</label>
+      <label class="check-item"><input type="checkbox" value="fumou">🚬 Fumou</label>
+      <label class="check-item"><input type="checkbox" value="acucar">🍪 Açúcar/ultra-proc.</label>
+      <label class="check-item"><input type="checkbox" value="sem-banheiro">🚽 Sem ir ao banheiro</label>
+      <label class="check-item"><input type="checkbox" value="pre-menstrual">🩸 Pré-menstrual</label>
+      <label class="check-item"><input type="checkbox" value="bebeu-alcool">🍺 Álcool</label>
+    </div>
+
+    <label>Fatores positivos do dia</label>
+    <div class="check-grid" id="check-positivos">
+      <label class="check-item"><input type="checkbox" value="cha-alcachofra">🌿 Chá alcachofra</label>
+      <label class="check-item"><input type="checkbox" value="academia">🏋️ Academia</label>
+      <label class="check-item"><input type="checkbox" value="piscina">🏊 Piscina</label>
+      <label class="check-item"><input type="checkbox" value="massagem">👐 Massagem facial</label>
+      <label class="check-item"><input type="checkbox" value="bom-sono">😴 Dormiu bem</label>
+      <label class="check-item"><input type="checkbox" value="frutas-legumes">🥦 Frutas/legumes</label>
+    </div>
+
+    <label>Observação da pele</label>
+    <textarea id="obs-pele" placeholder="Ex: manchas vermelhas no queixo, pus novo, pele macia..."></textarea>
+  </div>
+
+  <!-- ÁGUA -->
+  <div class="card">
+    <div class="card-title">💧 Água (cada gota = 600ml)</div>
+    <div class="water-row" id="water-btns">
+      <button class="water-btn" data-i="0">💧</button>
+      <button class="water-btn" data-i="1">💧</button>
+      <button class="water-btn" data-i="2">💧</button>
+      <button class="water-btn" data-i="3">💧</button>
+      <button class="water-btn" data-i="4">💧</button>
+    </div>
+    <div class="water-label" id="water-label">0ml — toque para marcar</div>
+  </div>
+
+  <!-- CABELO -->
+  <div class="card">
+    <div class="card-title">💇 Cabelo hoje</div>
+    <label>Como está o cabelo? (1–5)</label>
+    <div class="rating-group">
+      <div class="stars" id="stars-cabelo" data-key="cabelo">
+        <span class="star" data-v="1">★</span>
+        <span class="star" data-v="2">★</span>
+        <span class="star" data-v="3">★</span>
+        <span class="star" data-v="4">★</span>
+        <span class="star" data-v="5">★</span>
+      </div>
+    </div>
+
+    <label>O que fez no cabelo?</label>
+    <div class="check-grid" id="check-cabelo">
+      <label class="check-item"><input type="checkbox" value="lavou">🚿 Lavou</label>
+      <label class="check-item"><input type="checkbox" value="protetor-uv">☀️ Protetor UV (piscina)</label>
+      <label class="check-item"><input type="checkbox" value="oleo-natura">🫙 Óleo Natura</label>
+      <label class="check-item"><input type="checkbox" value="oleo-loreal">🫙 Óleo 10em1 L'Oréal</label>
+      <label class="check-item"><input type="checkbox" value="nao-mergulhou">🙅 Não mergulhou</label>
+      <label class="check-item"><input type="checkbox" value="secou-nuca">💆 Hidratou nuca</label>
+    </div>
+    <div class="outro-toggle" onclick="toggleOutro('outro-cabelo')">＋ Adicionar outro produto do cabelo</div>
+    <div class="outro-fields" id="outro-cabelo">
+      <input type="text" id="outro-cabelo-1" placeholder="Ex: shampoo específico, condicionador...">
+      <input type="text" id="outro-cabelo-2" placeholder="Mais um produto (opcional)">
+    </div>
+
+    <label>Observação do cabelo</label>
+    <textarea id="obs-cabelo" placeholder="Ex: brilhoso, opaco, seco atrás, com volume..."></textarea>
+  </div>
+
+  <!-- BOTÃO SALVAR -->
+  <button class="btn btn-primary" onclick="salvarRegistro()">Salvar registro do dia</button>
+
+  <!-- RESULTADO -->
+  <div id="resultado" style="display:none;">
+    <div class="card">
+      <div class="card-title">Feedback do seu protocolo</div>
+      <div class="thermo-pair">
+        <div class="thermo-box pos">
+          <div class="thermo-pct" id="pct-pos">0%</div>
+          <div class="thermo-label">Positivo</div>
+          <div class="thermo-bar"><div class="thermo-fill" id="bar-pos" style="width:0%"></div></div>
+          <div class="thermo-motivos" id="motivos-pos"></div>
+        </div>
+        <div class="thermo-box neg">
+          <div class="thermo-pct" id="pct-neg">0%</div>
+          <div class="thermo-label">A melhorar</div>
+          <div class="thermo-bar"><div class="thermo-fill" id="bar-neg" style="width:0%"></div></div>
+          <div class="thermo-motivos" id="motivos-neg"></div>
+        </div>
+      </div>
+      <div id="feedback-texto" style="font-size:13px;color:var(--ink);line-height:1.6;"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══ VIEW: HISTÓRICO ═══ -->
+<div id="view-historico" class="view">
+  <div id="historico-lista">
+    <div class="empty"><div class="empty-icon">📅</div><p>Nenhum registro ainda.<br>Comece pelo ✏️ Registrar!</p></div>
+  </div>
+</div>
+
+<!-- ═══ VIEW: RELATÓRIO PDF ═══ -->
+<div id="view-relatorio" class="view">
+  <div class="pdf-section">
+    <div class="card-title" style="color:var(--skin);font-family:'Playfair Display',serif;font-size:18px;margin-bottom:14px;">📊 Resumo Mensal em PDF</div>
+    <label>Selecione o mês</label>
+    <input type="month" id="mes-pdf">
+    <button class="btn btn-secondary" onclick="gerarPDFMensal()" style="margin-top:8px;">Gerar PDF do mês</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Como usar em qualquer dispositivo</div>
+    <p style="font-size:13px;color:var(--muted);line-height:1.7;">
+      Para acessar de <strong>celular e computador</strong>, você precisa configurar seu próprio Firebase gratuito. É simples:<br><br>
+      1. Acesse <strong>console.firebase.google.com</strong><br>
+      2. Crie um projeto gratuito<br>
+      3. Clique em "Firestore Database" → criar banco<br>
+      4. Em "Configurações do projeto" copie os dados do SDK<br>
+      5. Abra este arquivo HTML em um editor de texto e substitua os campos <strong>COLE_AQUI</strong> pelos seus dados<br>
+      6. Hospede o arquivo no <strong>GitHub Pages</strong> (gratuito) para acessar de qualquer lugar<br><br>
+      <strong>Até configurar o Firebase</strong>, tudo salva no navegador atual automaticamente.
+    </p>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ══ DICA DO DIA ══
+function mostrarDicaDoDia() {
+  const dicas = [
+    { icon: '💧', msg: 'Beber água antes de lavar o rosto ativa a circulação e potencializa a absorção dos produtos.' },
+    { icon: '🧊', msg: 'O gelo de camomila antes do skincare noturno reduz inflamação ativa em até 10 minutos. Priorize nos dias de estresse.' },
+    { icon: '🌙', msg: 'O maior erro da noite é dormir com o rosto oleoso. A limpeza noturna é mais importante que a matinal.' },
+    { icon: '🩸', msg: 'Na semana pré-menstrual, troque o azelaico pelo effaclar à noite. Pele inflamada reage melhor a anti-inflamatórios do que a renovadores.' },
+    { icon: '🚬', msg: 'Um dia fumando aumenta a oxidação da pele por 48h. Se fumou, reforce a hidratação e o ciclapast nessa janela.' },
+    { icon: '🌿', msg: 'O chá de alcachofra antes do almoço ajuda o fígado a processar o excesso de hormônios — um dos motivos da acne melhorar com ele.' },
+    { icon: '😴', msg: 'A pele se regenera entre 22h e 2h. Dormir antes da meia-noite vale mais que qualquer sérum noturno.' },
+    { icon: '🍪', msg: 'Açúcar eleva insulina, que eleva andrógenos, que aumentam a produção de sebo. O ciclo da acne começa na alimentação.' },
+    { icon: '👐', msg: 'A massagem ascendente da mandíbula à orelha drena linfa e reduz inchaço. Faça enquanto aplica o ciclapast.' },
+    { icon: '☀️', msg: 'Protetor solar não é opcional para pele acneica — sem ele, toda mancha pós-inflamatória escurece e demora o dobro para sumir.' },
+    { icon: '🚽', msg: 'Intestino preso por mais de 3 dias aparece na pele. A alcachofra e o dente-de-leão são seus aliados internos.' },
+    { icon: '✨', msg: 'O ácido azelaico é o mais seguro para peles sensíveis: anti-inflamatório, antibacteriano e clareador ao mesmo tempo, sem irritar.' },
+    { icon: '🧴', msg: 'Aplicar muito produto não acelera o resultado — aplicar pouco e com consistência sim. Menos é mais, especialmente no ciclapast.' },
+    { icon: '🔄', msg: 'Trocar de produto toda semana impede que você saiba o que realmente funciona. Dê pelo menos 3 semanas antes de avaliar.' },
+    { icon: '💆', msg: 'Estresse crônico eleva cortisol, que aumenta sebo e inflama a pele. Cuidar da pele também é cuidar da mente.' },
+    { icon: '🫙', msg: 'Óleo no cabelo antes da escova sela a cutícula e protege do calor. O segredo do brilho não é o produto — é a ordem de aplicação.' },
+    { icon: '🏊', msg: 'O cloro da piscina oxida a fibra capilar. O protetor leave-in antes de entrar não é opcional — é a diferença entre o cabelo 3/5 e 5/5.' },
+    { icon: '🌊', msg: 'Não mergulhar o cabelo na piscina preserva mais que qualquer reconstrução depois. A prevenção supera a reparação.' },
+    { icon: '🥦', msg: 'Zinco presente em leguminosas e sementes é um dos micronutrientes mais associados à redução de acne inflamatória.' },
+    { icon: '⏰', msg: 'Registrar o protocolo à noite, antes de dormir, é mais preciso que fazer de manhã. O hábito de registrar é o que transforma o diário em dado.' },
+  ];
+  const idx = new Date().getDate() % dicas.length;
+  const dica = dicas[idx];
+  document.getElementById('dica-icon').textContent = dica.icon;
+  document.getElementById('dica-msg').textContent = dica.msg;
+}
+
+// ══ TOGGLE OUTRO ══
+function toggleOutro(id) {
+  const el = document.getElementById(id);
+  el.classList.toggle('open');
+  const toggle = el.previousElementSibling;
+  toggle.textContent = el.classList.contains('open')
+    ? '− Fechar campo extra'
+    : '＋ Adicionar outro produto';
+}
+
+// ══ ESTADO ══
+let waterCount = 0;
+const ratings = { pele: 0, cabelo: 0 };
+
+// ══ TABS ══
+function showView(id, btn) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('view-' + id).classList.add('active');
+  btn.classList.add('active');
+  if (id === 'historico') carregarHistorico();
+}
+
+// ══ STARS ══
+document.querySelectorAll('.stars').forEach(group => {
+  const key = group.dataset.key;
+  group.querySelectorAll('.star').forEach(star => {
+    star.addEventListener('click', () => {
+      const val = parseInt(star.dataset.v);
+      ratings[key] = val;
+      group.querySelectorAll('.star').forEach(s => {
+        s.classList.toggle('on', parseInt(s.dataset.v) <= val);
+      });
+    });
+  });
+});
+
+// ══ CHECKBOXES ══
+document.querySelectorAll('.check-item').forEach(item => {
+  item.addEventListener('click', () => item.classList.toggle('selected'));
+});
+
+// ══ WATER ══
+document.querySelectorAll('.water-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const i = parseInt(btn.dataset.i);
+    waterCount = (waterCount === i + 1) ? i : i + 1;
+    atualizarWater();
+  });
+});
+
+function atualizarWater() {
+  document.querySelectorAll('.water-btn').forEach((b, j) => b.classList.toggle('on', j < waterCount));
+  const ml = waterCount * 600;
+  const label = document.getElementById('water-label');
+  if (waterCount === 0) label.textContent = '0ml — toque para marcar';
+  else if (waterCount < 4) label.textContent = `${ml}ml — faltam ${(5 - waterCount) * 600}ml para a meta`;
+  else if (waterCount === 4) label.textContent = `${ml}ml — quase lá! mais 1 gota 💪`;
+  else label.textContent = `3.000ml ✓ Meta atingida!`;
+}
+
+// ══ COLETAR FORMULÁRIO ══
+function coletarFormulario() {
+  const getChecked = (id) => [...document.querySelectorAll(`#${id} input:checked`)].map(i => i.value);
+  const getOutro = (prefix) => [1,2].map(n => document.getElementById(`${prefix}-${n}`)?.value?.trim()).filter(Boolean);
+  return {
+    pelaNota: ratings.pele,
+    cabeloNota: ratings.cabelo,
+    manha: getChecked('check-manha'),
+    noite: getChecked('check-noite'),
+    gatilhos: getChecked('check-gatilhos'),
+    positivos: getChecked('check-positivos'),
+    cabelo: getChecked('check-cabelo'),
+    outroManha: getOutro('outro-manha'),
+    outroNoite: getOutro('outro-noite'),
+    outroCabelo: getOutro('outro-cabelo'),
+    agua: waterCount,
+    obsPele: document.getElementById('obs-pele').value,
+    obsCabelo: document.getElementById('obs-cabelo').value,
+    timestamp: Date.now()
+  };
+}
+
+// ══ PREENCHER FORMULÁRIO ══
+function preencherFormulario(r) {
+  // ratings
+  ['pele', 'cabelo'].forEach(key => {
+    const val = key === 'pele' ? r.pelaNota : r.cabeloNota;
+    ratings[key] = val || 0;
+    document.querySelectorAll(`#stars-${key} .star`).forEach(s => {
+      s.classList.toggle('on', parseInt(s.dataset.v) <= (val || 0));
+    });
+  });
+  // checks
+  const fillChecks = (groupId, vals) => {
+    document.querySelectorAll(`#${groupId} .check-item`).forEach(item => {
+      const v = item.querySelector('input').value;
+      item.classList.toggle('selected', (vals||[]).includes(v));
+      if ((vals||[]).includes(v)) item.querySelector('input').checked = true;
+    });
+  };
+  fillChecks('check-manha', r.manha);
+  fillChecks('check-noite', r.noite);
+  fillChecks('check-gatilhos', r.gatilhos);
+  fillChecks('check-positivos', r.positivos);
+  fillChecks('check-cabelo', r.cabelo);
+  // water
+  waterCount = r.agua || 0;
+  atualizarWater();
+  // outros
+  const fillOutro = (prefix, vals) => {
+    if (!vals || !vals.length) return;
+    document.getElementById(prefix).classList.add('open');
+    const toggle = document.getElementById(prefix).previousElementSibling;
+    toggle.textContent = '− Fechar campo extra';
+    vals.forEach((v, i) => {
+      const el = document.getElementById(`${prefix}-${i+1}`);
+      if (el) el.value = v;
+    });
+  };
+  fillOutro('outro-manha', r.outroManha);
+  fillOutro('outro-noite', r.outroNoite);
+  fillOutro('outro-cabelo', r.outroCabelo);
+  // obs
+  document.getElementById('obs-pele').value = r.obsPele || '';
+  document.getElementById('obs-cabelo').value = r.obsCabelo || '';
+  // mostrar feedback
+  if (r.feedback) mostrarFeedback(r.feedback);
+}
+
+// ══ CALCULAR FEEDBACK ══
+function calcularFeedback(r) {
+  const posItems = [];
+  const negItems = [];
+  let posScore = 0;
+  let negScore = 0;
+
+  // protocolo noturno
+  const temEffaclar = r.noite.includes('effaclar-gel');
+  const temCiclapast = r.noite.includes('ciclapast');
+  const temGelo = r.noite.includes('gelo-camomila');
+  const temAzelaico = r.noite.includes('azelaico') || r.manha.includes('azelaico');
+  const temProtetor = r.manha.includes('episol');
+
+  if (temEffaclar) { posScore += 15; posItems.push('Effaclar gel à noite ✓'); }
+  if (temCiclapast) { posScore += 10; posItems.push('Ciclapast aplicado ✓'); }
+  if (temGelo) { posScore += 12; posItems.push('Gelo de camomila ✓'); }
+  if (temProtetor) { posScore += 12; posItems.push('Protetor solar ✓'); }
+  if (temAzelaico && !r.gatilhos.includes('pre-menstrual')) { posScore += 10; posItems.push('Ácido azelaico ✓'); }
+
+  // água
+  if (r.agua >= 4) { posScore += 15; posItems.push(`${r.agua * 600}ml de água ✓`); }
+  else if (r.agua >= 3) { posScore += 8; posItems.push(`${r.agua * 600}ml de água (bom)`); }
+  else { negScore += 15; negItems.push(`Pouca água (${r.agua * 600}ml)`); }
+
+  // positivos
+  if (r.positivos.includes('cha-alcachofra')) { posScore += 10; posItems.push('Chá de alcachofra ✓'); }
+  if (r.positivos.includes('academia') || r.positivos.includes('piscina')) { posScore += 8; posItems.push('Exercício ✓'); }
+  if (r.positivos.includes('massagem')) { posScore += 5; posItems.push('Massagem facial ✓'); }
+  if (r.positivos.includes('bom-sono')) { posScore += 8; posItems.push('Boa noite de sono ✓'); }
+  if (r.positivos.includes('frutas-legumes')) { posScore += 6; posItems.push('Frutas/legumes ✓'); }
+
+  // gatilhos negativos
+  if (r.gatilhos.includes('fumou')) { negScore += 20; negItems.push('Fumou (gatilho de inflamação)'); }
+  if (r.gatilhos.includes('acucar')) { negScore += 15; negItems.push('Açúcar/ultraprocessados'); }
+  if (r.gatilhos.includes('sem-banheiro')) { negScore += 12; negItems.push('Sem ir ao banheiro'); }
+  if (r.gatilhos.includes('estresse')) { negScore += 15; negItems.push('Estresse (gatilho principal)'); }
+  if (r.gatilhos.includes('pre-menstrual')) { negScore += 10; negItems.push('Fase pré-menstrual'); }
+  if (r.gatilhos.includes('bebeu-alcool')) { negScore += 10; negItems.push('Álcool'); }
+
+  // azelaico em dia inflamatório
+  if (temAzelaico && r.gatilhos.includes('pre-menstrual')) {
+    negScore += 8; negItems.push('Azelaico em dia inflamatório (risco de piora)');
+  }
+
+  // normalizar
+  const total = posScore + negScore || 1;
+  const posPct = Math.round((posScore / total) * 100);
+  const negPct = 100 - posPct;
+
+  // texto de feedback
+  let texto = '';
+  if (posPct >= 70) texto = '✨ Protocolo sólido hoje! Continue assim.';
+  else if (posPct >= 50) texto = '👍 Dia razoável. Pequenos ajustes fariam diferença.';
+  else if (posPct >= 30) texto = '⚠️ Vários gatilhos ativos hoje. A pele pode reagir nos próximos dias.';
+  else texto = '🔴 Dia difícil. Não se culpe — identifique o gatilho principal e cuide especialmente amanhã.';
+
+  return { posPct, negPct, posItems, negItems, texto };
+}
+
+// ══ MOSTRAR FEEDBACK ══
+function mostrarFeedback(fb) {
+  document.getElementById('resultado').style.display = 'block';
+  document.getElementById('pct-pos').textContent = fb.posPct + '%';
+  document.getElementById('pct-neg').textContent = fb.negPct + '%';
+  setTimeout(() => {
+    document.getElementById('bar-pos').style.width = fb.posPct + '%';
+    document.getElementById('bar-neg').style.width = fb.negPct + '%';
+  }, 100);
+  document.getElementById('motivos-pos').innerHTML = fb.posItems.map(i => `• ${i}`).join('<br>');
+  document.getElementById('motivos-neg').innerHTML = fb.negItems.map(i => `• ${i}`).join('<br>');
+  document.getElementById('feedback-texto').textContent = fb.texto;
+  document.getElementById('resultado').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ══ RENDER HISTÓRICO ══
+function renderHistorico(registros) {
+  const el = document.getElementById('historico-lista');
+  if (!registros.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📅</div><p>Nenhum registro ainda.</p></div>';
+    return;
+  }
+  el.innerHTML = registros.map(r => {
+    const fb = r.feedback || calcularFeedback(r);
+    const dataFmt = r.data ? r.data.split('-').reverse().join('/') : '—';
+    return `<div class="hist-item" onclick="irParaDia('${r.data}')">
+      <div class="hist-date">${dataFmt}</div>
+      <div class="hist-bars" style="flex:1">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+          <div class="hist-mini-bar" style="width:${fb.posPct}%;background:var(--good);flex:${fb.posPct}"></div>
+          <div class="hist-mini-bar" style="width:${fb.negPct}%;background:var(--warn);flex:${fb.negPct}"></div>
+        </div>
+        <div style="font-size:10px;color:var(--muted)">🧴 ${r.pelaNota||'—'}/5 · 💧 ${(r.agua||0)*600}ml</div>
+      </div>
+      <div class="hist-score" style="color:${fb.posPct>=60?'var(--good)':'var(--warn)'}">
+        ${fb.posPct}%
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function irParaDia(data) {
+  document.getElementById('data-input').value = data;
+  showView('registrar', document.querySelector('.tab-btn'));
+  document.querySelectorAll('.tab-btn')[0].classList.add('active');
+  document.querySelectorAll('.tab-btn').forEach((b,i) => { if(i>0) b.classList.remove('active'); });
+  carregarDia(data);
+}
+
+// ══ GERAR PDF ══
+function gerarPDF(registros, mes) {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ format: 'a4', unit: 'mm' });
+  const W = 210, M = 16;
+  let y = 20;
+
+  const hex2rgb = h => {
+    const r = parseInt(h.slice(1,3),16), g = parseInt(h.slice(3,5),16), b = parseInt(h.slice(5,7),16);
+    return [r,g,b];
+  };
+
+  // HEADER
+  pdf.setFillColor(...hex2rgb('#3A1F14'));
+  pdf.rect(0, 0, W, 32, 'F');
+  pdf.setTextColor(242, 212, 194);
+  pdf.setFontSize(20);
+  pdf.setFont('times', 'italic');
+  pdf.text('Diário da Pele', M, 14);
+  pdf.setFontSize(10);
+  pdf.setFont('helvetica', 'normal');
+  const [anoStr, mesStr] = mes.split('-');
+  const meses = ['','Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  pdf.text(`Resumo de ${meses[parseInt(mesStr)]} ${anoStr}`, M, 22);
+  pdf.text(`${registros.length} registro(s)`, M, 28);
+  y = 44;
+
+  // MEDIA GERAL
+  const mediaPos = Math.round(registros.reduce((s,r) => s + ((r.feedback||calcularFeedback(r)).posPct), 0) / registros.length);
+  const mediaPele = (registros.reduce((s,r) => s + (r.pelaNota||0), 0) / registros.length).toFixed(1);
+  const mediaCabelo = (registros.reduce((s,r) => s + (r.cabeloNota||0), 0) / registros.length).toFixed(1);
+  const mediaAgua = ((registros.reduce((s,r) => s + (r.agua||0), 0) / registros.length) * 600).toFixed(0);
+
+  pdf.setFillColor(...hex2rgb('#FAF6F2'));
+  pdf.roundedRect(M, y, W - M*2, 28, 3, 3, 'F');
+  pdf.setTextColor(...hex2rgb('#3A1F14'));
+  pdf.setFontSize(9);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text('MÉDIA DO MÊS', M+6, y+7);
+  pdf.setFontSize(14);
+  pdf.setTextColor(...hex2rgb('#C97B5A'));
+  pdf.text(`${mediaPos}% positivo`, M+6, y+18);
+  pdf.setFontSize(9);
+  pdf.setTextColor(...hex2rgb('#9A7B6E'));
+  pdf.setFont('helvetica', 'normal');
+  pdf.text(`Pele: ${mediaPele}/5   Cabelo: ${mediaCabelo}/5   Água média: ${mediaAgua}ml/dia`, M+6, y+25);
+  y += 36;
+
+  // REGISTROS DIA A DIA
+  pdf.setFontSize(11);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(...hex2rgb('#C97B5A'));
+  pdf.text('Registros dia a dia', M, y);
+  y += 8;
+
+  registros.forEach((r, idx) => {
+    if (y > 260) { pdf.addPage(); y = 20; }
+    const fb = r.feedback || calcularFeedback(r);
+    const dataFmt = r.data.split('-').reverse().join('/');
+    const corBg = idx % 2 === 0 ? '#FFFFFF' : '#FAF6F2';
+    pdf.setFillColor(...hex2rgb(corBg));
+    pdf.rect(M, y-1, W-M*2, 24, 'F');
+
+    // data + score
+    pdf.setFontSize(9);
+    pdf.setFont('helvetica', 'bold');
+    pdf.setTextColor(...hex2rgb('#3A1F14'));
+    pdf.text(dataFmt, M+2, y+5);
+    const scoreColor = fb.posPct >= 60 ? '#5E9E8A' : '#D4724A';
+    pdf.setTextColor(...hex2rgb(scoreColor));
+    pdf.text(`${fb.posPct}% pos`, W-M-28, y+5);
+
+    // barra
+    pdf.setFillColor(...hex2rgb('#EDE0D8'));
+    pdf.rect(M+2, y+8, W-M*2-4, 3, 'F');
+    pdf.setFillColor(...hex2rgb('#5E9E8A'));
+    pdf.rect(M+2, y+8, (W-M*2-4) * fb.posPct/100, 3, 'F');
+
+    // info
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(8);
+    pdf.setTextColor(...hex2rgb('#9A7B6E'));
+    const gatStr = (r.gatilhos||[]).join(', ') || 'nenhum';
+    const outrosStr = [...(r.outroManha||[]), ...(r.outroNoite||[])].join(', ');
+    pdf.text(`Pele: ${r.pelaNota||'—'}/5  Cabelo: ${r.cabeloNota||'—'}/5  Agua: ${(r.agua||0)*600}ml`, M+2, y+16);
+    pdf.text(`Gatilhos: ${gatStr}${outrosStr ? ' | Extras: '+outrosStr : ''}`, M+2, y+21);
+
+    y += 27;
+  });
+
+  // GATILHOS MAIS FREQUENTES
+  if (y > 240) { pdf.addPage(); y = 20; }
+  y += 4;
+  const gatContagem = {};
+  registros.forEach(r => (r.gatilhos||[]).forEach(g => { gatContagem[g] = (gatContagem[g]||0)+1; }));
+  const topGat = Object.entries(gatContagem).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  pdf.setFontSize(11);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(...hex2rgb('#C97B5A'));
+  pdf.text('Gatilhos mais frequentes do mês', M, y);
+  y += 8;
+
+  const nomes = { estresse:'Estresse', fumou:'Fumou', acucar:'Açúcar/ultraprocessados', 'sem-banheiro':'Sem ir ao banheiro', 'pre-menstrual':'Pré-menstrual', 'bebeu-alcool':'Álcool' };
+  topGat.forEach(([g, c]) => {
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(9);
+    pdf.setTextColor(...hex2rgb('#3A1F14'));
+    pdf.text(`${nomes[g]||g}: ${c}x`, M+4, y);
+    y += 6;
+  });
+
+  // DIAGNÓSTICO
+  if (y > 240) { pdf.addPage(); y = 20; }
+  y += 6;
+  pdf.setFontSize(11);
+  pdf.setFont('helvetica', 'bold');
+  pdf.setTextColor(...hex2rgb('#C97B5A'));
+  pdf.text('Diagnóstico do mês', M, y);
+  y += 8;
+
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(9);
+  pdf.setTextColor(...hex2rgb('#3A1F14'));
+
+  let diag = '';
+  if (mediaPos >= 70) diag = 'Mês excelente! Protocolo seguido com consistência. Continue mantendo.';
+  else if (mediaPos >= 55) diag = 'Mês bom com espaço para melhora. Reforce os dias de gatilho ativo.';
+  else if (mediaPos >= 40) diag = 'Mês desafiador. Identifique quais dias puxaram o score para baixo e ajuste o protocolo.';
+  else diag = 'Mês difícil. O padrão sugere que fatores externos (estresse, ciclo) estão dominando. Priorize o básico: água, limpeza, sono.';
+
+  const diagLines = pdf.splitTextToSize(diag, W - M*2 - 4);
+  pdf.text(diagLines, M+2, y);
+  y += diagLines.length * 5 + 8;
+
+  // RODAPÉ
+  pdf.setFontSize(7);
+  pdf.setTextColor(...hex2rgb('#9A7B6E'));
+  pdf.text('Diário da Pele · gerado automaticamente · para uso pessoal', M, 287);
+
+  pdf.save(`diario-pele-${mes}.pdf`);
+  showToast('📄 PDF gerado!');
+}
+
+// ══ LOCAL STORAGE ══
+function salvarLocal(data, registro) {
+  const todos = JSON.parse(localStorage.getItem('diario_pele') || '{}');
+  todos[data] = registro;
+  localStorage.setItem('diario_pele', JSON.stringify(todos));
+}
+
+function carregarLocal(data) {
+  const todos = JSON.parse(localStorage.getItem('diario_pele') || '{}');
+  return todos[data] || null;
+}
+
+function carregarTodosLocais() {
+  const todos = JSON.parse(localStorage.getItem('diario_pele') || '{}');
+  return Object.values(todos);
+}
+
+// ══ TOAST ══
+function showToast(msg, tipo = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = tipo === 'erro' ? 'show erro' : 'show';
+  setTimeout(() => t.className = '', 2500);
+}
+</script>
+</body>
+</html>
