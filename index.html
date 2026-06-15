@@ -69,7 +69,8 @@
       } catch(e) {}
     }
     if (!registro) registro = carregarLocal(data);
-    if (registro) preencherFormulario(registro);
+    if (registro) { preencherFormulario(registro); return true; }
+    return false;
   };
 
   // ── CARREGAR HISTÓRICO ──
@@ -110,8 +111,26 @@
     const hoje = new Date().toISOString().split('T')[0];
     document.getElementById('data-input').value = hoje;
     carregarHistorico();
-    document.getElementById('data-input').addEventListener('change', e => carregarDia(e.target.value));
     mostrarDicaDoDia();
+
+    // Ao mudar a data: carrega registro salvo ou rascunho
+    document.getElementById('data-input').addEventListener('change', e => {
+      const d = e.target.value;
+      carregarDia(d).then(carregou => {
+        if (!carregou) carregarRascunho(d);
+      });
+    });
+
+    // Autosave em todos os inputs/checkboxes
+    document.querySelectorAll('input, textarea, select').forEach(el => {
+      el.addEventListener('change', agendarRascunho);
+      el.addEventListener('input', agendarRascunho);
+    });
+
+    // Carrega rascunho do dia atual se não houver registro salvo
+    carregarDia(hoje).then(carregou => {
+      if (!carregou) carregarRascunho(hoje);
+    });
   });
 </script>
 
@@ -485,6 +504,7 @@ textarea { resize: vertical; min-height: 70px; }
     <div class="dica-eyebrow">Dica do dia</div>
     <div class="dica-msg" id="dica-msg">Carregando dica...</div>
   </div>
+  <button onclick="trocarDica()" title="Nova dica" style="background:none;border:none;cursor:pointer;font-size:18px;opacity:0.7;padding:4px;flex-shrink:0;color:var(--skin);transition:transform 0.4s;" id="btn-dica">🔄</button>
 </div>
 
 <div class="tabs">
@@ -555,6 +575,9 @@ textarea { resize: vertical; min-height: 70px; }
       <label class="check-item"><input type="checkbox" value="sem-banheiro">🚽 Sem ir ao banheiro</label>
       <label class="check-item"><input type="checkbox" value="pre-menstrual">🩸 Pré-menstrual</label>
       <label class="check-item"><input type="checkbox" value="bebeu-alcool">🍺 Álcool</label>
+      <label class="check-item"><input type="checkbox" value="ovulando">🌕 Ovulando</label>
+      <label class="check-item"><input type="checkbox" value="trabalhou-muito">💼 Trabalhou muito</label>
+      <label class="check-item"><input type="checkbox" value="pegou-sol">☀️ Pegou sol</label>
     </div>
 
     <label>Fatores positivos do dia</label>
@@ -678,34 +701,277 @@ textarea { resize: vertical; min-height: 70px; }
 <div id="toast"></div>
 
 <script>
-// ══ DICA DO DIA ══
+// ══ DICAS DO DIA (dermatologista virtual) ══
+const DICAS = [
+  // ACNE INFLAMATÓRIA
+  {icon:'🧊',msg:'Gelo de camomila por 2 minutos antes do skincare noturno reduz ativamente a inflamação. Faça isso sempre que sentir espinha nascendo.'},
+  {icon:'🌙',msg:'A limpeza noturna é mais importante que a matinal. À noite você remove sebo, poluição e maquiagem acumulados; de manhã o rosto está relativamente limpo.'},
+  {icon:'✨',msg:'O ácido azelaico age em 3 frentes ao mesmo tempo: antibacteriano, anti-inflamatório e clareador de manchas. É o ativo mais seguro para pele acneica sensível.'},
+  {icon:'🎯',msg:'Effaclar duo M deve ser aplicado pontualmente nas áreas vermelhas, não espalhado por todo o rosto. A concentração localizada é o que faz ele funcionar.'},
+  {icon:'🤍',msg:'Ciclapast em camada finíssima — menos de 1mm — é suficiente para cicatrizar sem ocluir os poros. Mais produto não acelera o resultado.'},
+  {icon:'🩸',msg:'Na semana pré-menstrual, os andrógenos sobem e aumentam a produção de sebo. Troque o azelaico pelo effaclar à noite nessa fase para evitar piora inflamatória.'},
+  {icon:'🌕',msg:'Na ovulação, o estrogênio está no pico — é a melhor fase do mês para usar ativos mais fortes como azelaico e ácidos. Aproveite a janela.'},
+  {icon:'💊',msg:'Espinha com pus interno: não esprema. Aplique gelo, depois tea tree pontual, depois ciclapast. O pus vai reabsorver em 48-72h sem deixar mancha.'},
+  {icon:'🔬',msg:'A acne no queixo e mandíbula é quase sempre hormonal. Produtos tópicos ajudam, mas o gatilho real é interno — ciclo, estresse e alimentação.'},
+  {icon:'⚗️',msg:'Peróxido de benzoíla e ácido azelaico não devem ser usados juntos na mesma etapa — um neutraliza o outro. Se usar os dois, separe manhã e noite.'},
+  {icon:'🧫',msg:'A bactéria C. acnes se prolifera em ambiente anaeróbico (sem oxigênio). Poros obstruídos por oleosidade criam esse ambiente. A limpeza noturna quebra esse ciclo.'},
+  {icon:'🌿',msg:'Tea tree a 5% tem eficácia comparável ao peróxido de benzoíla a 2,5% para acne leve, com menos irritação. Aplique pontualmente com cotonete.'},
+  {icon:'❄️',msg:'Camomila tem azuleno, um anti-inflamatório natural. O gelo potencializa a penetração e a vasoconstricção. Juntos são mais eficazes que cada um separado.'},
+  {icon:'🏥',msg:'Acne que não melhora em 3 meses de protocolo consistente precisa de avaliação dermatológica. Pode ser resistência bacteriana ou componente hormonal não tratado.'},
+  {icon:'💉',msg:'Manchas vermelhas pós-acne (eritema pós-inflamatório) somem em 3-6 meses com protetor solar diário. Sem protetor, podem levar mais de 1 ano.'},
+  {icon:'🔴',msg:'Espremer espinha aumenta o risco de mancha em até 400%. O trauma na pele ativa melanócitos na área, que produzem pigmento em excesso como resposta defensiva.'},
+  {icon:'🧴',msg:'Não troque de produto antes de 3-4 semanas. A pele leva esse tempo para mostrar resposta real. Trocas frequentes impedem que qualquer coisa funcione.'},
+  {icon:'📊',msg:'Purging (piora inicial com ácidos e retinoides) dura no máximo 4-6 semanas. Se a piora passou desse prazo, não é purging — é reação ao produto.'},
+  {icon:'🦠',msg:'Fronha do travesseiro acumula bactérias, oleosidade e resíduos de cabelo. Troque a cada 3 dias durante fases inflamatórias. É um gatilho subestimado.'},
+  {icon:'💆',msg:'Coçar ou tocar o rosto sem lavar as mãos transfere bactérias da pele das mãos diretamente para os poros. Reduza o toque ao mínimo necessário.'},
+  // PROTETOR SOLAR & MANCHAS
+  {icon:'☀️',msg:'Protetor solar não é opcional para pele acneica — sem ele, cada mancha pós-inflamatória escurece e demora o dobro do tempo para sumir.'},
+  {icon:'🌤️',msg:'UVA atravessa vidro e nuvens. Mesmo em dia nublado dentro de casa perto da janela, as manchas da pele estão sendo estimuladas. Protetor indoor importa.'},
+  {icon:'🔆',msg:'Reaplicar o protetor a cada 2h de exposição não é exagero — é o mínimo para manter a FPS real na pele. Uma aplicação pela manhã não dura o dia todo.'},
+  {icon:'⏱️',msg:'Aplique o protetor 20 minutos antes de sair ao sol para que os filtros químicos se ativem. Filtros físicos (dióxido de titânio) protegem imediatamente.'},
+  {icon:'🌊',msg:'Água, suor e areia removem o protetor em minutos. Após sair da piscina, lave o rosto e reaaplique antes de se expor de novo.'},
+  {icon:'🎨',msg:'Manchas pós-acne (hiperpigmentação) respondem bem à combinação: protetor solar + azelaico + vitamina C de manhã. O protetor é o mais importante dos três.'},
+  {icon:'💛',msg:'Niacinamida a 5-10% inibe a transferência de melanina para as células da pele. É um dos clareadores mais bem tolerados para pele sensível acneica.'},
+  // HIDRATAÇÃO & BARREIRA
+  {icon:'💧',msg:'Beber 2,5-3L de água por dia melhora a elasticidade da pele e reduz a produção compensatória de sebo. Pele desidratada produz mais oleosidade.'},
+  {icon:'🛡️',msg:'Pele acneica ressecada por produtos agressivos produz mais sebo para compensar — criando mais acne. Hidratação não comedogênica é obrigatória, não opcional.'},
+  {icon:'🧱',msg:'Barreira cutânea íntegra = pele que aguenta ativos sem irritar. Quando a barreira está comprometida, qualquer produto inflama. Ciclapast e niacinamida restauram.'},
+  {icon:'🌡️',msg:'Água muito quente no banho destrói os lipídios naturais da barreira cutânea. Use água morna, especialmente ao lavar o rosto.'},
+  {icon:'🫧',msg:'Limpadores com pH acima de 7 (sabonetes comuns) alteram o manto ácido da pele. Para pele acneica, procure limpadores com pH entre 4,5 e 6.'},
+  {icon:'🤲',msg:'Esfregar o rosto com a toalha irrita a barreira cutânea. Seque com movimentos de pressão suave, nunca fricção. Toalha limpa e seca, trocada frequentemente.'},
+  // INTESTINO & INTERNO
+  {icon:'🌿',msg:'Chá de alcachofra estimula a produção de bile e o fluxo hepático, ajudando o fígado a metabolizar hormônios. Beba antes do almoço para melhor absorção.'},
+  {icon:'🌱',msg:'Chá de dente-de-leão tem ação diurética e depurativa hepática. Combinado com alcachofra, potencializa a eliminação de toxinas e excesso hormonal.'},
+  {icon:'🚽',msg:'Intestino preso por 3+ dias causa reabsorção de toxinas e metabólitos hormonais que deveriam ser eliminados. Isso aparece diretamente na pele como inflamação.'},
+  {icon:'🦠',msg:'Probióticos orais (Lactobacillus rhamnosus e similares) mostraram redução de lesões inflamatórias em estudos recentes. O eixo intestino-pele é real.'},
+  {icon:'🥦',msg:'Zinco presente em sementes de abóbora, lentilha e grão-de-bico inibe a enzima 5-alfa-redutase, que converte testosterona em DHT — o hormônio que mais inflama a pele.'},
+  {icon:'🍬',msg:'Açúcar eleva insulina → insulina eleva IGF-1 → IGF-1 estimula andrógenos → andrógenos aumentam sebo → mais acne. O ciclo começa no que você come.'},
+  {icon:'🧀',msg:'Laticínios, especialmente leite desnatado, elevam IGF-1 e hormônios de crescimento bovinos que estimulam as glândulas sebáceas. Observe se há correlação na sua pele.'},
+  {icon:'🌾',msg:'Alimentos com alto índice glicêmico (pão branco, arroz branco, refrigerante) disparam o mesmo cascata inflamatória do açúcar. A troca por versões integrais faz diferença real.'},
+  {icon:'🫚',msg:'Ômega-3 (sardinha, chia, linhaça) tem ação anti-inflamatória sistêmica. Suplementação de 2g/dia mostrou redução de lesões inflamatórias em estudos controlados.'},
+  // ESTRESSE & CICLO
+  {icon:'😰',msg:'Cortisol elevado pelo estresse aumenta a produção de sebo e reduz a resposta imune da pele. Um dia muito estressante reflete na pele 24-72h depois.'},
+  {icon:'😴',msg:'A pele se regenera entre 22h e 2h da manhã, quando o GH (hormônio do crescimento) está no pico. Dormir nessa janela vale mais que qualquer sérum noturno.'},
+  {icon:'🧘',msg:'Respiração 4-6 (inspira 4 tempos, expira 6) ativa o sistema parassimpático e reduz cortisol em minutos. Use quando sentir estresse físico intenso.'},
+  {icon:'📅',msg:'Mapeie seu ciclo menstrual e antecipe as fases: pré-menstrual (reforça effaclar, reduz açúcar), ovulação (aproveite para ativos), pós-menstrual (melhor semana para pele).'},
+  {icon:'💼',msg:'Trabalhar muitas horas seguidas sem pausa mantém o cortisol cronicamente elevado. Microintervalos de 5 minutos a cada hora reduzem o impacto hormonal na pele.'},
+  // CABELO
+  {icon:'🏊',msg:'O cloro da piscina eleva o pH do cabelo e oxida as proteínas da fibra capilar. O leave-in UV antes de entrar é proteção, não luxo — é a diferença entre 3/5 e 5/5.'},
+  {icon:'🌊',msg:'Não mergulhar o cabelo na piscina preserva mais a fibra do que qualquer tratamento de reconstrução depois. Prevenção supera reparação.'},
+  {icon:'🫙',msg:'Óleo capilar antes da escova selando a cutícula protege do calor mecânico. O segredo do brilho não é o produto — é a ordem de aplicação: óleo → calor → finalizador.'},
+  {icon:'💆',msg:'Ao aplicar condicionador, dedique atenção extra à nuca e parte de baixo do cabelo — regiões que recebem menos produto e secam mais. Deixe 3-5 minutos antes de enxaguar.'},
+  {icon:'🚿',msg:'Água muito quente abre demais as cutículas e resseca o fio. Finalize sempre com água fria para fechar a cutícula e garantir brilho.'},
+  {icon:'🔄',msg:'Trocar de kit capilar toda semana impede que você saiba o que realmente funciona. Mantenha um kit fixo por pelo menos 3 semanas antes de avaliar resultado.'},
+  {icon:'🌿',msg:'Shampoo de reconstrução + condicionador de nutrição é a combinação que deu o melhor resultado documentado no seu diário. Proteína + lipídio = força + brilho.'},
+  {icon:'⚗️',msg:'Shampoo sulfatado remove a oleosidade eficientemente mas agride a cutícula. Para cabelos cacheados ou ressecados, prefira fórmulas low-poo ou co-wash.'},
+  // MASSAGEM & DRENAGEM
+  {icon:'👐',msg:'Massagem ascendente da linha do bigode em direção à orelha drena linfa e reduz inchaço facial. Faça com as costas do dedo, 10 repetições de cada lado, ao aplicar o ciclapast.'},
+  {icon:'👆',msg:'Beliscões leves na linha da mandíbula estimulam a microcirculação local. Faça 10 vezes de cada lado antes de dormir — reduz retenção e melhora o contorno ao longo do tempo.'},
+  {icon:'🫧',msg:'Gua sha (pedra de quartzo ou jade) feito com movimentos ascendentes e de dentro para fora auxilia a drenagem linfática. Use com óleo para não tracionar a pele.'},
+  {icon:'💎',msg:'O rolo de quartzo gelado funciona como o gelo de camomila: vasoconstrição + anti-inflamatório mecânico. Guarde na geladeira para potencializar o efeito.'},
+  // CUTÍCULAS & PELE JOVEM
+  {icon:'💅',msg:'Cutículas ressecadas são sinal de desidratação sistêmica ou deficiência de vitamina E. Hidrate com óleo de amêndoas ou vitamina E pura à noite, com curativo oclusivo se necessário.'},
+  {icon:'🧴',msg:'Nunca corte cutículas — empurre suavemente com palito de madeira após amolecê-las na água morna. Cortar cria microinflamações que pioram a aparência e aumentam infecções.'},
+  {icon:'🫶',msg:'As mãos envelhecem antes do rosto porque geralmente ficam de fora da rotina de protetor solar. Aplique o FPS também nas mãos, especialmente nas costas.'},
+  {icon:'🌟',msg:'Vitamina C tópica (ácido ascórbico 10-20%) estimula colágeno, clarea manchas e neutraliza radicais livres. Aplique de manhã antes do protetor para potencializar ambos.'},
+  {icon:'🧬',msg:'Retinol aumenta a renovação celular e estimula colágeno. Para iniciantes: comece com 0,025% uma vez por semana, aumente gradualmente. Sempre à noite, sempre com protetor no dia seguinte.'},
+  {icon:'🌊',msg:'Ácido hialurônico aplicado sobre pele úmida retém água na superfície. Sobre pele seca, pode ter efeito contrário e ressecar mais. Sempre borrife água antes de aplicar.'},
+  {icon:'🥑',msg:'Vitamina E (tocoferol) protege as membranas celulares da oxidação. Encontrada em abacate, azeite e sementes — seu impacto na pele começa pelo que você come.'},
+  {icon:'💆',msg:'Protetor solar diário é o único ativo com evidência científica sólida de prevenção do envelhecimento cutâneo precoce. Mais eficaz que qualquer anti-aging tópico.'},
+  {icon:'🌙',msg:'A pele perde mais água à noite (perda transepidérmica de água). Hidratante noturno mais oclusivo que o diurno compensa essa perda e acelera a recuperação.'},
+  {icon:'🧪',msg:'Peptídeos de cobre (GHK-Cu) estimulam colágeno, elastina e têm ação anti-inflamatória. Boa opção para pele acneica que quer anti-aging sem risco de comedogenicidade.'},
+  {icon:'⚡',msg:'Microagulhamento doméstico (dermaroller 0,2-0,3mm) estimula a circulação e aumenta a absorção de ativos em até 80%. Use apenas em pele sem acne ativa.'},
+  // SOL & AMBIENTE
+  {icon:'☀️',msg:'Pegar sol sem protetor por mais de 10 minutos em horário de pico (10h-16h) pode escurecer manchas pós-acne em até 3 tons. O dano é cumulativo e irreversível.'},
+  {icon:'🌆',msg:'Poluição urbana (material particulado e ozônio) gera radicais livres na pele que oxidam o sebo e contribuem para inflamação. Vitamina C tópica e lavagem noturna são as defesas.'},
+  {icon:'💨',msg:'Ar condicionado resseca o ambiente e reduz a hidratação cutânea. Se você passa horas em ambiente climatizado, um hidratante leve extra ao longo do dia faz diferença real.'},
+  {icon:'🌡️',msg:'Calor excessivo dilata os vasos e aumenta a oleosidade. Em dias muito quentes, opte por limpadores em gel e hidratantes mais leves. A pele regula diferente no verão.'},
+  // ROTINA & CONSISTÊNCIA
+  {icon:'⏰',msg:'Registrar o protocolo à noite, antes de dormir, é mais preciso que fazer de manhã. O hábito de registrar é o que transforma o diário em dado confiável.'},
+  {icon:'📈',msg:'Consistência supera qualquer produto. Uma rotina simples mantida por 90 dias mostra mais resultado do que 10 produtos trocados toda semana.'},
+  {icon:'🔄',msg:'O maior erro de quem tem acne é desistir de um protocolo antes de 4 semanas. A maioria dos ativos tópicos precisa de 28-42 dias (1-1,5 ciclos de renovação celular) para agir.'},
+  {icon:'📋',msg:'Antes de adicionar um novo produto à rotina, elimine um. Rotina com muitos ativos dificulta identificar o que funciona e aumenta o risco de irritação por sobreposição.'},
+  {icon:'🌅',msg:'Manhã: limpar (suave) → tratar → proteger. Noite: limpar (eficiente) → tratar → recuperar. Essa ordem é a lógica da rotina — não inverta.'},
+  {icon:'🧹',msg:'Limpar pincéis de maquiagem semanalmente e esponjas a cada uso elimina um reservatório silencioso de bactérias que vai diretamente para os poros.'},
+  {icon:'📱',msg:'A tela do celular acumula oleosidade, maquiagem e bactérias. Limpe com álcool 70% diariamente — especialmente se você fala ao telefone encostando no rosto.'},
+  {icon:'🎽',msg:'Roupas de academia suadas em contato com o rosto (capuz, gola alta) transferem bactérias e suor que inflamam. Lave o rosto imediatamente após o treino.'},
+  // SONO
+  {icon:'😴',msg:'Privação de sono aumenta cortisol, reduz a produção de colágeno e prejudica a renovação celular noturna. 7-8h de sono tem impacto direto na aparência da pele.'},
+  {icon:'🛏️',msg:'Fronha de seda ou cetim reduz a fricção no rosto durante o sono, diminuindo a irritação mecânica que pode desencadear acne em peles sensíveis.'},
+  {icon:'🌃',msg:'Dormir de lado pressionando sempre o mesmo lado do rosto cria pressão repetida que pode piorar acne local. Tente dormir de barriga para cima sempre que possível.'},
+  // EXERCÍCIO
+  {icon:'🏋️',msg:'Exercício físico regular reduz cortisol crônico e melhora a microcirculação cutânea. Os benefícios aparecem na pele em 4-6 semanas de prática consistente.'},
+  {icon:'💦',msg:'Suar durante o exercício ajuda a eliminar impurezas dos poros — mas só se você lavar o rosto logo depois. Suor seco sobre a pele pode piorar a acne.'},
+  {icon:'🏊',msg:'Nadar sem mergulhar o rosto preserva a barreira cutânea e evita exposição ao cloro facial. O movimento já beneficia a circulação sistêmica.'},
+  // MAQUIAGEM
+  {icon:'💄',msg:'Maquiagem não comedogênica não é marketing — é uma diferença real na formulação. Procure o termo na embalagem e verifique os ingredientes comedogênicos principais.'},
+  {icon:'🧽',msg:'Dormir com maquiagem uma vez já é suficiente para obstruir poros e desencadear um ciclo inflamatório. Bioderma antes de dormir é inegociável.'},
+  {icon:'🪞',msg:'Base com FPS não substitui o protetor solar — a quantidade aplicada de base é insuficiente para atingir o FPS indicado na embalagem. Use os dois.'},
+  // VARIAÇÕES HORMONAIS
+  {icon:'🌸',msg:'Pós-menstruação é a melhor semana do ciclo para a pele: estrogênio subindo, andrógenos baixos. Aproveite para usar ativos mais fortes e fazer procedimentos.'},
+  {icon:'🌕',msg:'Na ovulação, o pico de estrogênio deixa a pele naturalmente mais luminosa e menos oleosa. É o momento de registrar o potencial máximo da sua pele.'},
+  {icon:'🌑',msg:'Na fase lútea (após ovulação até menstruar), progesterona e andrógenos sobem. Pele mais oleosa, poros mais dilatados, maior tendência a espinhas. Reforce a limpeza.'},
+  {icon:'💊',msg:'Anticoncepcional oral pode melhorar ou piorar a acne dependendo do tipo de progestagênio. Se a acne piorou após mudar o método, converse com seu ginecologista.'},
+  // INGREDIENTES ESPECÍFICOS
+  {icon:'🟢',msg:'Effaclar gel tem pH ácido que respeita o manto ácido da pele e remove oleosidade sem agredir a barreira. É superior aos sabonetes comuns para pele acneica.'},
+  {icon:'🫧',msg:'Ácido salicílico (BHA) penetra no poro e dissolve o sebo oxidado que forma cravos. Ideal para peles oleosas com cravos. Diferente do ácido azelaico — escolha conforme a necessidade.'},
+  {icon:'🧬',msg:'Niacinamida regula a produção de sebo, minimiza poros, clarea manchas e fortalece a barreira — tudo ao mesmo tempo. É o ativo mais versátil para pele acneica adulta.'},
+  {icon:'🌱',msg:'Centella asiática (CICA) acelera a cicatrização, reduz vermelhidão e restaura a barreira. É o ingrediente principal do ciclapast — daí o nome.'},
+  {icon:'💙',msg:'Pantenol (pró-vitamina B5) é um dos hidratantes mais seguros para pele acneica: não comedogênico, anti-inflamatório e cicatrizante. Presente em vários hidratantes leves.'},
+  {icon:'🟡',msg:'Vitamina C (ácido ascórbico) é instável e se oxida rápido. Se o produto ficou amarelado ou alaranjado, já perdeu eficácia. Guarde na geladeira e use em até 3 meses após aberto.'},
+  {icon:'🔵',msg:'Ácido glicólico (AHA) esfoliia a superfície da pele e melhora textura e manchas. Começa com concentrações de 5-8% à noite e sempre com protetor no dia seguinte.'},
+  // PELE JOVEM / ANTI-AGING
+  {icon:'⏳',msg:'O colágeno começa a diminuir a partir dos 25 anos, 1% ao ano. Vitamina C tópica, retinol e protetor solar são os três pilares com mais evidência para desacelerar esse processo.'},
+  {icon:'🌟',msg:'Área dos olhos tem a pele mais fina do corpo — apenas 0,5mm. Use apenas produtos formulados para essa região e aplique com o dedo anelar (menos pressão).'},
+  {icon:'💦',msg:'Expressões faciais repetidas (franzir testa, apertar olhos ao sol) formam rugas de expressão. Óculos de sol e protetor evitam as contrações involuntárias por claridade.'},
+  {icon:'🥗',msg:'Dieta antioxidante (frutas coloridas, vegetais, azeite) protege a pele do estresse oxidativo que acelera o envelhecimento. O que você come constrói a pele que você tem.'},
+  {icon:'🚫',msg:'Açúcar se liga ao colágeno num processo chamado glicação, tornando as fibras rígidas e quebradiças. Reduzir o consumo de açúcar é uma das medidas anti-aging mais eficazes.'},
+  {icon:'💨',msg:'Fumar reduz o fluxo sanguíneo para a pele, diminui oxigenação e destrói vitamina C e colágeno. O impacto no envelhecimento cutâneo é visível já nos primeiros anos.'},
+  {icon:'🧴',msg:'Retinol à noite + vitamina C de manhã + protetor solar é a tríade com mais evidência científica para prevenir e reverter sinais de envelhecimento precoce.'},
+  // EXTRA
+  {icon:'💅',msg:'Cutículas bem hidratadas são sinal de saúde sistêmica. Use óleo de cuticúla (jojoba, amêndoas ou vitamina E) diariamente à noite, empurrando suavemente após o banho.'},
+  {icon:'🫶',msg:'Unhas fracas que quebram fácil podem indicar deficiência de biotina (B7), ferro ou zinco. Avalie com exame de sangue antes de suplementar.'},
+  {icon:'🌺',msg:'Água de rosas tem propriedades anti-inflamatórias suaves e pode ser usada como tônico calmante. Borrife no rosto após a limpeza antes de aplicar hidratante.'},
+  {icon:'🍵',msg:'Chá verde (EGCG) tem potente ação antioxidante e anti-inflamatória. Tanto tópico quanto oral mostra benefícios para pele acneica em estudos preliminares.'},
+  {icon:'🧂',msg:'Excesso de sódio causa retenção de líquido que aparece como inchaço facial, especialmente ao acordar. Reduza o sal no jantar se acordar com o rosto inchado regularmente.'},
+  {icon:'🌙',msg:'A produção de melatonina começa quando a luz azul cessa. Usar o celular até dormir atrasa esse processo, prejudicando o sono e, consequentemente, a recuperação da pele.'},
+  {icon:'🧠',msg:'A pele e o cérebro se desenvolvem do mesmo tecido embrionário (ectoderma). A conexão neuroinflamatória é real — estresse emocional afeta diretamente a resposta imune da pele.'},
+  {icon:'🌬️',msg:'Respirar pela boca durante o sono resseca os lábios e a região perioral. Se você acorda com lábios muito secos, verifique se não há obstrução nasal que force a respiração bucal.'},
+  {icon:'🏃',msg:'Exercício aeróbico aumenta o fluxo de sangue para a pele, entregando oxigênio e nutrientes e removendo resíduos metabólicos. 30 minutos de caminhada já fazem diferença visível.'},
+  {icon:'🌿',msg:'Babosa (aloe vera) pura tem ação cicatrizante, hidratante e anti-inflamatória comprovadas. Pode ser aplicada diretamente em manchas e áreas irritadas como curativo natural.'},
+  // DICAS 120-200
+  {icon:'🧊',msg:'Nunca aplique gelo diretamente na pele — envolva em pano fino. O contato direto pode causar queimadura por frio, especialmente em pele sensível já inflamada.'},
+  {icon:'🌸',msg:'Pétalas de rosa têm taninos com leve ação adstringente e anti-inflamatória. Água floral de rosa pura (sem álcool) pode ser usada como tônico calmante após a limpeza.'},
+  {icon:'🍋',msg:'Suco de limão não deve ser aplicado na pele — é fotossensibilizante, ácido demais (pH 2) e causa queimaduras ao sol. O ácido azelaico faz o que o limão promete, com segurança.'},
+  {icon:'🫁',msg:'Respiração profunda ativa o nervo vago e reduz a resposta inflamatória sistêmica. 5 minutos de respiração consciente antes de dormir potencializa a recuperação noturna da pele.'},
+  {icon:'🧃',msg:'Suco de goiaba tem uma das maiores concentrações de vitamina C entre as frutas. Tomar regularmente contribui para a síntese de colágeno de dentro para fora.'},
+  {icon:'🫐',msg:'Blueberries, açaí e romã têm antocianinas, antioxidantes que neutralizam radicais livres responsáveis pelo envelhecimento cutâneo. Inclua frutas vermelhas e roxas na alimentação.'},
+  {icon:'🧂',msg:'Sal no rosto (produtos com cloreto de sódio alto) pode ser comedogênico para algumas peles. Se você nada no mar e a pele piora, enxágue o rosto logo após sair da água.'},
+  {icon:'🪷',msg:'Óleo de rosa mosqueta é rico em ácido linoleico, que está deficiente em peles acneicas. Aplicado à noite em pele já hidratada, pode ajudar a regular o sebo sem entupir poros.'},
+  {icon:'🫶',msg:'Automassagem facial diária de 5 minutos melhora a microcirculação, reduz tensão muscular e drenagem linfática — benefícios que nenhum creme consegue replicar isoladamente.'},
+  {icon:'🌡️',msg:'Febre, mesmo leve, aumenta a circulação cutânea e pode piorar acne inflamatória temporariamente. Nos dias doentes, mantenha o protocolo mínimo: limpeza + ciclapast.'},
+  {icon:'💊',msg:'Antibióticos orais para acne funcionam a curto prazo, mas geram resistência bacteriana. Dermatologistas recomendam combiná-los sempre com peróxido de benzoíla para reduzir esse risco.'},
+  {icon:'🧬',msg:'A acne tem componente genético forte — se seus pais tiveram acne severa, suas chances são maiores. Isso não significa que o tratamento não funciona, apenas que pode exigir mais consistência.'},
+  {icon:'🌊',msg:'Piscina com cloro remove os óleos naturais da pele além de matar bactérias. Após nadar, hidrate o rosto imediatamente para compensar a perda de barreira.'},
+  {icon:'🧴',msg:'Produtos com álcool desnaturado (álcool SD, isopropanol) ressecam e irritam a pele acneica a longo prazo, mesmo que pareçam refrescantes no momento da aplicação.'},
+  {icon:'🫚',msg:'Óleo de jojoba tem estrutura química similar ao sebo humano. É um dos óleos menos comedogênicos e pode ser usado para remover maquiagem sem agredir a barreira.'},
+  {icon:'🌱',msg:'Chá de camomila bebido à noite tem ação ansiolítica suave. Reduzir a ansiedade antes de dormir melhora a qualidade do sono e, consequentemente, a recuperação da pele.'},
+  {icon:'🍵',msg:'Chá branco tem mais antioxidantes que o chá verde por ser menos processado. Seu consumo regular associa-se a menor dano oxidativo na pele em estudos preliminares.'},
+  {icon:'💧',msg:'Desidratação leve de 2% já reduz visivelmente a elasticidade da pele e aumenta a aparência de linhas finas. Beba água antes de sentir sede — a sede já é sinal de desidratação.'},
+  {icon:'🔆',msg:'Luz azul de telas (celular, computador) penetra mais fundo que UV e pode gerar radicais livres na pele. Protetores com iron oxides (óxido de ferro) na fórmula protegem contra luz visível.'},
+  {icon:'🎭',msg:'Maquiagem com cobertura total aplicada diariamente pode ocluir poros mesmo sendo não-comedogênica. Nos dias de descanso em casa, deixe a pele respirar sem base.'},
+  {icon:'🌿',msg:'Extrato de própolis tem ação antibacteriana e cicatrizante bem documentadas. Em gel ou sérum a 3-5%, pode ser aplicado pontualmente nas espinhas como alternativa natural ao tea tree.'},
+  {icon:'🧊',msg:'Aplicar o protetor solar gelado (guardado na geladeira) é mais agradável em dias quentes e não altera a eficácia do produto. Pode aumentar a aderência ao hábito.'},
+  {icon:'🫧',msg:'Espuma de sabonete que fica no rosto por menos de 30 segundos não tem tempo de agir. Massageie o limpador por pelo menos 60 segundos para limpeza efetiva.'},
+  {icon:'🌙',msg:'Usar o celular na cama após a limpeza noturna toca a tela (cheia de bactérias) e depois passa a mão no rosto sem perceber. Limpe o celular antes de deitar.'},
+  {icon:'💆',msg:'Tensão na mandíbula (bruxismo) ativa músculos que aumentam a pressão nos folículos pilossebáceos da região. Se você range os dentes, isso pode contribuir para acne na mandíbula.'},
+  {icon:'🏋️',msg:'Suplementos de whey protein elevam IGF-1, o mesmo fator de crescimento que estimula sebáceas. Se você usa whey e tem acne, considere substituir por proteína vegetal por 4 semanas para testar.'},
+  {icon:'🌺',msg:'Óleo essencial de lavanda tem ação antibacteriana e calmante. Diluído em óleo carreador (1-2 gotas em 10ml de jojoba), pode ser aplicado pontualmente em espinhas.'},
+  {icon:'🧪',msg:'Retinol 0,025% uma vez por semana é o ponto de partida correto. Aumentar antes da pele adaptar causa dermatite retinóide — irritação, descamação e piora temporária severa.'},
+  {icon:'💎',msg:'Diamante e cristais não têm ação comprovada na pele. Ingredientes com nomes sofisticados sem evidência científica são marketing. Foque em ativos com estudos clínicos publicados.'},
+  {icon:'🌾',msg:'Aveia coloidal tem beta-glucanas com ação anti-inflamatória e calmante comprovadas. Shampoos e limpadores com aveia são excelentes para peles sensíveis e reativas.'},
+  {icon:'🧵',msg:'Fio dental diariamente não é só saúde bucal — inflamação gengival crônica aumenta o nível sistêmico de citocinas inflamatórias que podem agravar condições de pele.'},
+  {icon:'🌅',msg:'A temperatura da pele é maior à tarde. Produtos aplicados entre 14h-17h podem penetrar mais rapidamente. Reaplicação do protetor nesse horário é especialmente importante.'},
+  {icon:'🫁',msg:'O sistema linfático não tem bomba própria — depende do movimento muscular para circular. Exercício físico é a forma mais eficiente de drenar toxinas acumuladas nos tecidos, incluindo a pele.'},
+  {icon:'🌿',msg:'Bardana (burdock root) é usada na medicina tradicional para depuração do sangue e melhora de condições de pele. Há evidências preliminares de ação anti-inflamatória e antibacteriana.'},
+  {icon:'🔬',msg:'Comedogênicos para evitar em produtos: óleo de coco, manteiga de cacau, lanolina, óleo mineral, isopropil miristato. Verifique os ingredientes antes de comprar qualquer produto novo.'},
+  {icon:'🧴',msg:'Mousse e gel para cabelo com álcool que escorrem para o rosto ao suar podem entupir poros na testa e têmporas. Prefira produtos de finalização com fórmulas sem álcool e não comedogênicas.'},
+  {icon:'🌊',msg:'Banho depois da academia deve ser no máximo morno — água quente após exercício intenso abre os poros já dilatados pelo suor e facilita a entrada de bactérias.'},
+  {icon:'💤',msg:'Apneia do sono reduz a oxigenação noturna, prejudicando a regeneração celular da pele. Se você ronca muito ou acorda cansado, investigue — é mais comum do que parece.'},
+  {icon:'🫐',msg:'Antocianinas das frutas roxas e vermelhas têm ação anti-inflamatória que age na mesma via do ibuprofeno, mas de forma suave e sem efeitos colaterais. Coma mais amora, jambo, açaí.'},
+  {icon:'🧬',msg:'O microbioma da pele (bactérias benéficas que vivem nela) é tão importante quanto o microbioma intestinal. Limpadores muito agressivos destroem essas bactérias e aumentam a vulnerabilidade a acne.'},
+  {icon:'🌸',msg:'Máscara de argila branca (caulim) é mais suave que a verde ou preta. Para pele acneica sensível, use argila branca 1-2x por semana para absorver oleosidade sem irritar.'},
+  {icon:'🧊',msg:'Argila verde tem maior capacidade de absorção de oleosidade, mas é mais agressiva. Use quinzenalmente no máximo, sempre hidratando bem depois para não comprometer a barreira.'},
+  {icon:'💆',msg:'Técnica de tapotagem (bater levemente com as pontas dos dedos) no rosto melhora a microcirculação e aumenta a absorção dos produtos aplicados imediatamente antes.'},
+  {icon:'🌙',msg:'O eixo hipotálamo-hipófise-suprarrenal (resposta ao estresse) demora 24-72h para normalizar após um episódio estressante. A pele reage nessa janela, não imediatamente.'},
+  {icon:'🍫',msg:'Chocolate amargo acima de 70% tem flavonoides com ação antioxidante e pode ser incluído com moderação. É o chocolate ao leite e branco — ricos em açúcar e leite — que piora a acne.'},
+  {icon:'🫚',msg:'Óleo de semente de uva tem índice comedogênico 1 (baixíssimo) e é rico em linoleico. Uma das opções mais seguras de óleo para pele acneica que precisa de hidratação lipídica.'},
+  {icon:'🌱',msg:'Panela de pressão e cozimento a vapor preservam mais nutrientes dos alimentos do que a fritura. O modo de preparo afeta diretamente o valor nutricional que chega à sua pele.'},
+  {icon:'🧪',msg:'Ácido mandélico é um AHA derivado de amêndoas com moléculas maiores — penetra mais lentamente e causa menos irritação que o glicólico. Boa opção para iniciantes em ácidos.'},
+  {icon:'💊',msg:'Suplementar zinco quelado (30-50mg/dia) por 3 meses mostrou redução de lesões inflamatórias comparável a antibióticos orais em alguns estudos, sem criar resistência bacteriana.'},
+  {icon:'🌿',msg:'Vitamina D deficiente está associada a piora de condições inflamatórias da pele, incluindo acne. Faça exame de sangue — deficiência é muito comum e a suplementação é simples.'},
+  {icon:'🧴',msg:'Primer com silicone preenche poros temporariamente — mas não os trata. A aparência de poros menores some quando você remove a maquiagem. O tratamento real é ácido salicílico e retinol.'},
+  {icon:'🌡️',msg:'Variações bruscas de temperatura (entrar em ambiente com ar-condicionado gelado vindo do calor) estressam os vasos da pele e podem piorar vermelhidão em peles reativas.'},
+  {icon:'💅',msg:'Esmaltes com formaldeído e tolueno são absorvidos pela cutícula e circulam sistemicamente. Prefira fórmulas 5-free ou 10-free, especialmente se você tem sensibilidade química.'},
+  {icon:'🫶',msg:'Hidratante para as mãos deve ser reaplicado após cada lavagem. Mãos ressecadas têm barreira comprometida, o que facilita infecções e torna as cutículas mais frágeis.'},
+  {icon:'🌊',msg:'Água do mar tem sal, magnésio e iodo — ação levemente antibacteriana e anti-inflamatória. Banho de mar pode melhorar temporariamente a acne, mas o sal resseca se não enxaguar.'},
+  {icon:'🧠',msg:'Expectativa de resultado irreal é uma das principais causas de abandono do protocolo. Acne leva meses para responder — quem desiste antes de 90 dias raramente vê o resultado real.'},
+  {icon:'🌺',msg:'Óleos essenciais NUNCA devem ser aplicados puros na pele. Sempre diluídos em óleo carreador a no máximo 2%. Aplicação pura pode causar queimaduras químicas e sensibilização permanente.'},
+  {icon:'🔬',msg:'Patch test (teste de alergia) antes de usar qualquer produto novo: aplique um pouco na parte interna do braço e aguarde 24h. Evita reações no rosto que são mais difíceis de tratar.'},
+  {icon:'🧴',msg:'Menos camadas de produto = menos chances de oclusão e reação. Se você usa 6+ produtos, teste remover os que têm menos evidência e veja se a pele responde melhor.'},
+  {icon:'🌙',msg:'Retirar a maquiagem com lenço umedecido sem lavar depois não é suficiente — deixa resíduos de emulsificante e surfactante que irritam a pele durante o sono. Sempre lave depois.'},
+  {icon:'💧',msg:'Água filtrada para lavar o rosto faz diferença se sua água tem muito cloro. O cloro tem ação bactericida que também afeta as bactérias benéficas do microbioma cutâneo.'},
+  {icon:'🌿',msg:'Espirulina (alga azul-verde) tomada oralmente tem ação anti-inflamatória e antioxidante. Estudos preliminares mostram benefícios para pele, mas as pesquisas ainda são pequenas.'},
+  {icon:'🧊',msg:'Colher de chá gelada sob os olhos por 2 minutos reduz inchaço palpebral por vasoconstricção. Alternativa ao rolo de quartzo para quem quer resultado imediato pela manhã.'},
+  {icon:'🎯',msg:'Espinha cística (nódulo sem cabeça, dolorosa) não responde bem a produtos tópicos — é profunda demais. Compressas mornas ajudam a drenar, mas o tratamento definitivo é dermatológico.'},
+  {icon:'🌸',msg:'Máscaras de papel (sheet masks) hidratam por oclusão temporária — o benefício some em horas. São boas para preparo rápido de pele antes de evento, não para tratamento de acne.'},
+  {icon:'🧬',msg:'Pele oleosa produz mais esqualeno natural, que em contato com o oxigênio forma peróxidos comedogênicos. A oxidação do sebo é tão importante quanto a quantidade produzida.'},
+  {icon:'🫧',msg:'Lavar o rosto mais de 2 vezes ao dia remove os lipídios protetores e sinaliza para a pele produzir mais sebo. Mais limpeza não é mais eficiente — é contraproducente.'},
+  {icon:'💆',msg:'Pressão dos óculos na raiz do nariz e nas têmporas pode criar microinflamações e acne localizada nessas regiões. Limpe as hastes dos óculos diariamente com álcool.'},
+  {icon:'🌅',msg:'Vitamina C é mais estável em formulações com pH 2,5-3,5. Se seu sérum não formiga levemente ao aplicar, pode estar pH-ajustado demais para ser eficaz. Verifique a formulação.'},
+  {icon:'🍳',msg:'Fritar alimentos libera acroleína, um oxidante que se deposita na pele. Cozinhar em ambientes ventilados e lavar o rosto após cozinhar fritos é uma medida subestimada.'},
+  {icon:'🧴',msg:'SPF 30 bloqueia 97% dos UVB. SPF 50 bloqueia 98%. A diferença é pequena — o que importa mais é a reaplicação correta do que um número alto na embalagem.'},
+  {icon:'🌿',msg:'Hamamelis (witch hazel) sem álcool tem ação adstringente e anti-inflamatória suave. Pode ser usado como tônico entre a limpeza e o hidratante para peles muito oleosas.'},
+  {icon:'💤',msg:'Cortisol segue ritmo circadiano — está mais alto ao acordar e mais baixo à noite. Rotina matinal calma (sem checar redes imediatamente) reduz o pico de cortisol e seus efeitos na pele.'},
+  {icon:'🔆',msg:'Óculos de sol com UV400 protegem os olhos, reduzem a necessidade de franzir (formação de rugas de expressão) e evitam a exposição solar da região periocular, a mais fina do rosto.'},
+  {icon:'🌊',msg:'Nadar em mar ou piscina aumenta a circulação sistêmica, reduz cortisol e tem efeito anti-inflamatório geral. O benefício do exercício aquático para a pele vai além do que acontece na superfície.'},
+  {icon:'🧪',msg:'Ácido kójico é clareador derivado de fungos com boa evidência para hiperpigmentação. Alternativa ao azelaico para manchas — pode ser combinado, mas introduza um de cada vez.'},
+  {icon:'🫁',msg:'Antioxidantes tópicos (vitamina C, E, niacinamida) e orais (frutas, vegetais) têm ação sinérgica. O que você aplica e o que você come se somam na proteção contra radicais livres.'},
+  {icon:'💊',msg:'Ferro baixo reduz a oxigenação dos tecidos, incluindo a pele, causando opacidade e lentidão na cicatrização. Mulheres com menstruação intensa têm maior risco de deficiência.'},
+  {icon:'🌸',msg:'Péptido de cobre (GHK-Cu) é um dos anti-aging com melhor relação custo-benefício e evidência. Estimula colágeno sem irritar, sendo seguro inclusive para pele acneica.'},
+  {icon:'🧊',msg:'Após procedimentos estéticos (peeling, microagulhamento), use apenas ciclapast ou vaselina por 48-72h. Qualquer ativo nessa janela pode causar reação severa em barreira comprometida.'},
+  {icon:'🌿',msg:'Própolis verde brasileira tem uma das maiores concentrações de artepilina C, um antibiótico natural. Extrato aquoso de própolis a 3% tem eficácia antibacteriana para acne comparável ao clindamicina tópica em estudos iniciais.'},
+  {icon:'🧴',msg:'Emolientes (silicones, ésteres) suavizam e deixam a pele macia, mas não hidratam. Humectantes (hialurônico, glicerina) atraem água. Oclusivos (vaselina, ciclapast) retêm. A combinação dos três é o ideal.'},
+  {icon:'💆',msg:'A pele do pescoço e do decote envelhece na mesma velocidade do rosto, mas raramente recebe o mesmo cuidado. Estenda o protetor solar, a vitamina C e o hidratante até essas regiões.'},
+  {icon:'🌙',msg:'Lavar o cabelo antes de dormir reduz a transferência de oleosidade e produto capilar para o rosto durante a noite — especialmente importante se você dorme com o cabelo no rosto.'},
+  {icon:'🫐',msg:'Resveratrol (presente na uva, amora e vinho tinto) tem ação antioxidante e anti-inflamatória. Tópico, estabilizado, mostra benefícios promissores para pele acneica com tendência a manchas.'},
+  {icon:'🌺',msg:'Aromaterapia não trata acne diretamente, mas pode reduzir o estresse que a piora. Difusor com lavanda ou bergamota no quarto antes de dormir é uma ferramenta legítima de manejo indireto.'},
+  {icon:'🧬',msg:'Cada pessoa tem um microbioma cutâneo único. O que funciona para uma amiga pode não funcionar para você — e vice-versa. Seu diário é sua melhor ferramenta de personalização.'},
+  {icon:'⏰',msg:'O hábito de anotar o protocolo diariamente transforma percepções subjetivas em dados objetivos. Em 90 dias, você terá evidência real do que funciona para a sua pele específica.'},
+];
+
+let dicaAtual = new Date().getDate() % DICAS.length;
+
 function mostrarDicaDoDia() {
-  const dicas = [
-    { icon: '💧', msg: 'Beber água antes de lavar o rosto ativa a circulação e potencializa a absorção dos produtos.' },
-    { icon: '🧊', msg: 'O gelo de camomila antes do skincare noturno reduz inflamação ativa em até 10 minutos. Priorize nos dias de estresse.' },
-    { icon: '🌙', msg: 'O maior erro da noite é dormir com o rosto oleoso. A limpeza noturna é mais importante que a matinal.' },
-    { icon: '🩸', msg: 'Na semana pré-menstrual, troque o azelaico pelo effaclar à noite. Pele inflamada reage melhor a anti-inflamatórios do que a renovadores.' },
-    { icon: '🚬', msg: 'Um dia fumando aumenta a oxidação da pele por 48h. Se fumou, reforce a hidratação e o ciclapast nessa janela.' },
-    { icon: '🌿', msg: 'O chá de alcachofra antes do almoço ajuda o fígado a processar o excesso de hormônios — um dos motivos da acne melhorar com ele.' },
-    { icon: '😴', msg: 'A pele se regenera entre 22h e 2h. Dormir antes da meia-noite vale mais que qualquer sérum noturno.' },
-    { icon: '🍪', msg: 'Açúcar eleva insulina, que eleva andrógenos, que aumentam a produção de sebo. O ciclo da acne começa na alimentação.' },
-    { icon: '👐', msg: 'A massagem ascendente da mandíbula à orelha drena linfa e reduz inchaço. Faça enquanto aplica o ciclapast.' },
-    { icon: '☀️', msg: 'Protetor solar não é opcional para pele acneica — sem ele, toda mancha pós-inflamatória escurece e demora o dobro para sumir.' },
-    { icon: '🚽', msg: 'Intestino preso por mais de 3 dias aparece na pele. A alcachofra e o dente-de-leão são seus aliados internos.' },
-    { icon: '✨', msg: 'O ácido azelaico é o mais seguro para peles sensíveis: anti-inflamatório, antibacteriano e clareador ao mesmo tempo, sem irritar.' },
-    { icon: '🧴', msg: 'Aplicar muito produto não acelera o resultado — aplicar pouco e com consistência sim. Menos é mais, especialmente no ciclapast.' },
-    { icon: '🔄', msg: 'Trocar de produto toda semana impede que você saiba o que realmente funciona. Dê pelo menos 3 semanas antes de avaliar.' },
-    { icon: '💆', msg: 'Estresse crônico eleva cortisol, que aumenta sebo e inflama a pele. Cuidar da pele também é cuidar da mente.' },
-    { icon: '🫙', msg: 'Óleo no cabelo antes da escova sela a cutícula e protege do calor. O segredo do brilho não é o produto — é a ordem de aplicação.' },
-    { icon: '🏊', msg: 'O cloro da piscina oxida a fibra capilar. O protetor leave-in antes de entrar não é opcional — é a diferença entre o cabelo 3/5 e 5/5.' },
-    { icon: '🌊', msg: 'Não mergulhar o cabelo na piscina preserva mais que qualquer reconstrução depois. A prevenção supera a reparação.' },
-    { icon: '🥦', msg: 'Zinco presente em leguminosas e sementes é um dos micronutrientes mais associados à redução de acne inflamatória.' },
-    { icon: '⏰', msg: 'Registrar o protocolo à noite, antes de dormir, é mais preciso que fazer de manhã. O hábito de registrar é o que transforma o diário em dado.' },
-  ];
-  const idx = new Date().getDate() % dicas.length;
-  const dica = dicas[idx];
+  const dica = DICAS[dicaAtual];
   document.getElementById('dica-icon').textContent = dica.icon;
   document.getElementById('dica-msg').textContent = dica.msg;
+}
+
+function trocarDica() {
+  let novo;
+  do { novo = Math.floor(Math.random() * DICAS.length); } while (novo === dicaAtual);
+  dicaAtual = novo;
+  const btn = document.getElementById('btn-dica');
+  btn.style.transform = 'rotate(360deg)';
+  setTimeout(() => btn.style.transform = '', 400);
+  mostrarDicaDoDia();
+}
+
+// ══ RASCUNHO AUTOMÁTICO ══
+let rascunhoTimer = null;
+function agendarRascunho() {
+  clearTimeout(rascunhoTimer);
+  rascunhoTimer = setTimeout(() => {
+    const data = document.getElementById('data-input').value;
+    if (!data) return;
+    const r = coletarFormulario();
+    r.data = data;
+    r.rascunho = true;
+    salvarLocal('rascunho_' + data, r);
+    const s = document.getElementById('firebase-status');
+    const orig = s.textContent;
+    s.textContent = '💾 Rascunho salvo';
+    setTimeout(() => s.textContent = orig, 1500);
+  }, 1200);
+}
+
+function carregarRascunho(data) {
+  const r = carregarLocal('rascunho_' + data);
+  if (r) {
+    preencherFormulario(r);
+    showToast('📝 Rascunho do dia restaurado');
+  }
 }
 
 // ══ TOGGLE OUTRO ══
@@ -741,13 +1007,14 @@ document.querySelectorAll('.stars').forEach(group => {
       group.querySelectorAll('.star').forEach(s => {
         s.classList.toggle('on', parseInt(s.dataset.v) <= val);
       });
+      agendarRascunho();
     });
   });
 });
 
 // ══ CHECKBOXES ══
 document.querySelectorAll('.check-item').forEach(item => {
-  item.addEventListener('click', () => item.classList.toggle('selected'));
+  item.addEventListener('click', () => { item.classList.toggle('selected'); agendarRascunho(); });
 });
 
 // ══ WATER ══
@@ -756,6 +1023,7 @@ document.querySelectorAll('.water-btn').forEach(btn => {
     const i = parseInt(btn.dataset.i);
     waterCount = (waterCount === i + 1) ? i : i + 1;
     atualizarWater();
+    agendarRascunho();
   });
 });
 
