@@ -300,7 +300,9 @@ textarea { resize: vertical; min-height: 70px; }
 .check-item.selected {
   background: var(--calm-light);
   border-color: var(--calm);
+  border-width: 2px;
   color: var(--deep);
+  font-weight: 600;
 }
 .check-item input { display: none; }
 
@@ -1014,7 +1016,19 @@ document.querySelectorAll('.stars').forEach(group => {
 
 // ══ CHECKBOXES ══
 document.querySelectorAll('.check-item').forEach(item => {
-  item.addEventListener('click', () => { item.classList.toggle('selected'); agendarRascunho(); });
+  const input = item.querySelector('input');
+  item.addEventListener('click', (e) => {
+    if (e.target !== input) {
+      e.preventDefault();
+      input.checked = !input.checked;
+    }
+    item.classList.toggle('selected', input.checked);
+    agendarRascunho();
+  });
+  input.addEventListener('change', () => {
+    item.classList.toggle('selected', input.checked);
+    agendarRascunho();
+  });
 });
 
 // ══ WATER ══
