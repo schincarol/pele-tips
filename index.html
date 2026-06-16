@@ -169,6 +169,14 @@ textarea{resize:vertical;min-height:70px;}
   <!-- GATILHOS -->
   <div class="card">
     <div class="card-title">⚡ Gatilhos e fatores do dia</div>
+    <label>Fatores positivos</label>
+    <div class="check-grid" id="check-positivos">
+      <label class="check-item"><input type="checkbox" value="cha-alcachofra">🌿 Chá alcachofra</label>
+      <label class="check-item"><input type="checkbox" value="academia">🏋️ Academia</label>
+      <label class="check-item"><input type="checkbox" value="massagem">👐 Massagem facial</label>
+      <label class="check-item"><input type="checkbox" value="bom-sono">😴 Dormiu bem</label>
+      <label class="check-item"><input type="checkbox" value="frutas-legumes">🥦 Frutas/legumes</label>
+    </div>
     <label>Gatilhos negativos</label>
     <div class="check-grid" id="check-gatilhos">
       <label class="check-item"><input type="checkbox" value="estresse">😰 Estresse</label>
@@ -181,14 +189,14 @@ textarea{resize:vertical;min-height:70px;}
       <label class="check-item"><input type="checkbox" value="trabalhou-muito">💼 Trabalhou muito</label>
       <label class="check-item"><input type="checkbox" value="pegou-sol">☀️ Pegou sol</label>
     </div>
-    <label>Fatores positivos</label>
-    <div class="check-grid" id="check-positivos">
-      <label class="check-item"><input type="checkbox" value="cha-alcachofra">🌿 Chá alcachofra</label>
-      <label class="check-item"><input type="checkbox" value="academia">🏋️ Academia</label>
-      <label class="check-item"><input type="checkbox" value="massagem">👐 Massagem facial</label>
-      <label class="check-item"><input type="checkbox" value="bom-sono">😴 Dormiu bem</label>
-      <label class="check-item"><input type="checkbox" value="frutas-legumes">🥦 Frutas/legumes</label>
+    <p class="section-title" style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;margin-top:4px;">Seus gatilhos personalizados</p>
+    <div id="gatilhos-custom-lista" class="check-grid"></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;">
+      <input type="text" id="custom-emoji" placeholder="🌶️" style="width:60px;margin-bottom:0;text-align:center;font-size:18px;">
+      <input type="text" id="custom-nome" placeholder="Ex: café em excesso..." style="flex:1;margin-bottom:0;">
+      <button onclick="adicionarGatilhoCustom()" style="padding:0 14px;border-radius:10px;border:1px solid var(--blush);background:none;color:var(--blush);font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap;flex-shrink:0;">+ Adicionar</button>
     </div>
+
     <label>Observação da pele</label>
     <textarea id="obs-pele" placeholder="Ex: manchas vermelhas no queixo, pus novo, pele macia..."></textarea>
   </div>
@@ -525,6 +533,7 @@ function coletarFormulario() {
     obsPele: document.getElementById('obs-pele').value,
     obsCabelo: document.getElementById('obs-cabelo').value,
     novidade: document.getElementById('novidade').value,
+    gatilhosCustom: getGatilhosCustomSelecionados(),
     timestamp: Date.now()
   };
 }
@@ -570,6 +579,7 @@ function preencherFormulario(r) {
   if (r.piscinaHoje) togglePiscina();
   // foto
   if (r.fotoUrl) { fotoUrl = r.fotoUrl; mostrarFotoSalva(r.fotoUrl); } else removerFoto();
+  restaurarGatilhosCustom(r.gatilhosCustom);
   if (r.feedback) mostrarFeedback(r.feedback);
 }
 
@@ -820,6 +830,95 @@ async function gerarPDFMensal() {
 
 async function carregarImgB64(url){
   try{const r=await fetch(url);const b=await r.blob();return new Promise((res,rej)=>{const rd=new FileReader();rd.onload=()=>res(rd.result);rd.onerror=rej;rd.readAsDataURL(b);});}catch(e){return null;}
+}
+
+// ════════════════════════════════
+// GATILHOS PERSONALIZADOS
+// ════════════════════════════════
+let gatilhosCustom = []; // {id, emoji, nome, selecionado}
+
+async function carregarGatilhosCustom() {
+  // local first
+  const local = carregarLocal('gatilhos_custom');
+  if (local) gatilhosCustom = local;
+  // then Firebase
+  if (window._db) {
+    try {
+      const snap = await window._getDoc(window._doc(window._db, 'config', USER_ID + '_gatilhos'));
+      if (snap.exists() && snap.data().lista) {
+        gatilhosCustom = snap.data().lista;
+        salvarLocal('gatilhos_custom', gatilhosCustom);
+      }
+    } catch(e) {}
+  }
+  renderGatilhosCustom();
+}
+
+async function salvarGatilhosCustom() {
+  salvarLocal('gatilhos_custom', gatilhosCustom);
+  if (window._db) {
+    try {
+      await window._setDoc(window._doc(window._db, 'config', USER_ID + '_gatilhos'), { lista: gatilhosCustom });
+    } catch(e) {}
+  }
+}
+
+async function adicionarGatilhoCustom() {
+  const emoji = document.getElementById('custom-emoji').value.trim() || '⚡';
+  const nome = document.getElementById('custom-nome').value.trim();
+  if (!nome) return showToast('Digite um nome para o gatilho', 'erro');
+  const id = 'custom_' + Date.now();
+  gatilhosCustom.push({ id, emoji, nome, selecionado: false });
+  document.getElementById('custom-emoji').value = '';
+  document.getElementById('custom-nome').value = '';
+  await salvarGatilhosCustom();
+  renderGatilhosCustom();
+  showToast('✓ Gatilho adicionado!');
+}
+
+async function removerGatilhoCustom(id) {
+  gatilhosCustom = gatilhosCustom.filter(g => g.id !== id);
+  await salvarGatilhosCustom();
+  renderGatilhosCustom();
+  agendarRascunho();
+}
+
+function renderGatilhosCustom() {
+  const lista = document.getElementById('gatilhos-custom-lista');
+  if (!lista) return;
+  if (!gatilhosCustom.length) {
+    lista.innerHTML = '<p style="font-size:12px;color:var(--muted);grid-column:span 2;margin-bottom:8px;">Nenhum gatilho personalizado ainda.</p>';
+    return;
+  }
+  lista.innerHTML = gatilhosCustom.map(g => `
+    <div class="check-item ${g.selecionado ? 'selected' : ''}" onclick="toggleGatilhoCustom('${g.id}')" style="position:relative;">
+      ${g.emoji} ${g.nome}
+      <button onclick="event.stopPropagation();removerGatilhoCustom('${g.id}')" 
+        style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:12px;color:var(--muted);padding:2px 4px;">✕</button>
+    </div>
+  `).join('');
+}
+
+function toggleGatilhoCustom(id) {
+  const g = gatilhosCustom.find(x => x.id === id);
+  if (g) { g.selecionado = !g.selecionado; renderGatilhosCustom(); agendarRascunho(); }
+}
+
+function getGatilhosCustomSelecionados() {
+  return gatilhosCustom.filter(g => g.selecionado).map(g => g.emoji + ' ' + g.nome);
+}
+
+function resetGatilhosCustomSelecionados() {
+  gatilhosCustom.forEach(g => g.selecionado = false);
+  renderGatilhosCustom();
+}
+
+function restaurarGatilhosCustom(selecionados) {
+  if (!selecionados) return;
+  gatilhosCustom.forEach(g => {
+    g.selecionado = selecionados.includes(g.emoji + ' ' + g.nome);
+  });
+  renderGatilhosCustom();
 }
 
 // ════════════════════════════════
@@ -1082,7 +1181,39 @@ const DICAS = [
   {icon:'🌿',msg:'Chá de rooibos rico em antioxidantes tem estudos preliminares de proteção contra dano UV. Sem cafeína, gostoso gelado — ótima opção de bebida nos dias de piscina.'},
   {icon:'🩱',msg:'Para bronzeado uniforme no rosto: proteja olhos e bigode (que já recebem mais sol) e exponha mais o pescoço e mandíbula, que costumam ficar mais claros.'},
   {icon:'🌊',msg:'Cabelo também sofre com o sol — o cloro da piscina mais UV é a combinação mais danosa para a fibra capilar. Leave-in UV antes de entrar protege cor, brilho e textura.'},
+  // ÓLEOS ESSENCIAIS E VEGETAIS
+  {icon:'🌺',msg:'Óleo essencial de lavanda (Lavandula angustifolia) tem linalol e linalil acetato com ação antibacteriana e anti-inflamatória comprovadas. A 2% em jojoba, aplicado pontualmente em espinhas, reduz vermelhidão em 24-48h.'},
+  {icon:'🌿',msg:'Tea tree (Melaleuca alternifolia) a 5% tem eficácia comparável ao peróxido de benzoíla a 2,5% para acne leve. Nunca use puro — dilua sempre em pelo menos 10 partes de óleo carreador antes de aplicar.'},
+  {icon:'🍊',msg:'Óleo essencial de bergamota tem limoneno com ação antimicrobiana, mas é fotossensibilizante. Use APENAS à noite e nunca antes de se expor ao sol — pode causar manchas permanentes.'},
+  {icon:'🌸',msg:'Rosa mosqueta não é essencial — é um óleo vegetal rico em ácido linoleico (36-40%). Peles acneicas têm deficiência desse ácido. Aplicado à noite em pele hidratada, ajuda a regular a produção de sebo.'},
+  {icon:'🫧',msg:'Óleo de jojoba tecnicamente é uma cera líquida, não um óleo. Sua estrutura imita o sebo humano e tem índice comedogênico 2 (baixo). É o melhor carreador para diluir óleos essenciais em pele acneica.'},
+  {icon:'🌱',msg:'Óleo essencial de hortelã-pimenta tem mentol que dá sensação refrescante e ação vasoconstritora. Diluído a 1% pode ajudar a reduzir poros dilatados temporariamente, mas irrita pele muito sensível.'},
+  {icon:'🍋',msg:'Óleos cítricos (limão, laranja, grapefruit) são todos fotossensibilizantes — nunca use antes do sol. À noite, diluídos, têm ação adstringente e leve clareadora, mas o azelaico é mais seguro e eficaz para manchas.'},
+  {icon:'🌼',msg:'Óleo essencial de camomila romana (Chamaemelum nobile) tem alfa-bisabolol com ação anti-inflamatória potente e muito suave. É o mais indicado para pele sensível reativa — 1-2% em jojoba aplicado após o gelo de camomila potencializa o efeito.'},
+  {icon:'🌲',msg:'Óleo essencial de cedro (Cedrus atlantica) tem propriedades adstringentes e levemente antissépticas. Indicado para pele oleosa — 2% em jojoba aplicado na zona T antes de dormir ajuda a regular o sebo.'},
+  {icon:'🌿',msg:'Óleo de semente de uva tem índice comedogênico 1 (baixíssimo) e é rico em ácido linoleico. Absorção rápida, textura seca — excelente base para diluir óleos essenciais em pele acneica sem sensação oleosa.'},
+  {icon:'🫚',msg:'Óleo de coco tem índice comedogênico 4 (alto) e entope poros na maioria das peles acneicas. Apesar da popularidade, NÃO é recomendado para pele com tendência a acne — substitua por jojoba ou semente de uva.'},
+  {icon:'🌹',msg:'Óleo essencial de rosa (Rosa damascena) tem geraniol e citronelol com ação anti-inflamatória e cicatrizante. Caro mas potente — 1% em jojoba para manchas pós-acne é uma das aplicações com melhor custo-benefício.'},
+  {icon:'🪴',msg:'Óleo de abacate é rico em ácido oleico e vitaminas A, D, E. Índice comedogênico 3 — moderado. Melhor para pele seca ou madura. Para pele acneica, use em pequena quantidade misturado a óleos mais leves.'},
+  {icon:'🌾',msg:'Óleo de argan tem índice comedogênico 0 — o mais baixo possível. Rico em vitamina E e ácidos graxos essenciais. Uma das melhores opções para pele acneica que precisa de nutrição sem risco de entupir poros.'},
+  {icon:'🌿',msg:'Óleo essencial de eucalipto tem 1,8-cineol com ação antibacteriana e descongestionante. Diluído a 1-2%, pode ser aplicado em espinhas com infecção ativa. Evite áreas próximas aos olhos — irrita mucosas.'},
+  {icon:'🍀',msg:'Óleo de calêndula (macerado) tem flavonoides com ação cicatrizante e anti-inflamatória suave. Excelente para manchas vermelhas recentes pós-acne — não é essencial, é oleoso, pode ser aplicado puro em pequena quantidade.'},
+  {icon:'🌺',msg:'Óleo essencial de neroli (flor de laranjeira) tem componentes calmantes para o sistema nervoso E para a pele. Reduz vermelhidão e tem ação regeneradora. A 2% em argan é um dos melhores combinados para pele acneica com estresse.'},
+  {icon:'🫙',msg:'Óleo de amêndoas doces tem índice comedogênico 2 e é rico em vitamina E. Melhor uso: hidratação de cutículas e corpo. Para o rosto acneico, prefira argan ou jojoba — amêndoas é mais oleoso e pode pesar em peles mistas.'},
+  {icon:'🌿',msg:'Óleo essencial de palmarosa tem geraniol com forte ação antifúngica e antibacteriana. Indicado para acne causada por fungo (pityrosporum folliculitis) — diferente da acne bacteriana comum e não responde a antibióticos.'},
+  {icon:'🌱',msg:'Óleo de semente de framboesa tem índice comedogênico 0-1 e FPS natural estimado em 28-50 (não substitui protetor solar, mas potencializa). Rico em ácido elágico com ação antioxidante e anti-inflamatória.'},
+  {icon:'🌸',msg:'Óleo essencial de ylang-ylang regula a produção de sebo e tem ação calmante. A 2% em jojoba, aplicado à noite na zona T, pode reduzir oleosidade ao longo de semanas. Perfume forte — use em quantidade mínima.'},
+  {icon:'🍃',msg:'Óleo de neem tem ação antibacteriana e antifúngica potente, mas cheiro muito intenso. Diluído a 2-5% em jojoba, aplicado pontualmente, é eficaz para espinhas ativas. Nunca puro — concentrado pode irritar.'},
+  {icon:'🌼',msg:'Óleo essencial de helichrysum (imortal) tem diona e neryl acetato com ação regeneradora única — estimula a formação de novas células. Indicado para cicatrizes e manchas antigas. Caro, mas o mais eficaz para pós-acne entre os essenciais.'},
+  {icon:'🫚',msg:'Óleo de maracujá tem índice comedogênico 2 e é rico em ácido linoleico (68-72%). Uma das melhores fontes desse ácido que falta em peles acneicas. Textura levíssima, absorção rápida — ótimo para uso noturno.'},
+  {icon:'🌿',msg:'Óleo essencial de cipreste tem ação adstringente e vasoconstritora. A 2% em jojoba, pode ser aplicado em poros dilatados e acne em cicatrização. Sua ação tônica melhora a firmeza da pele ao longo do tempo.'},
+  {icon:'🌹',msg:'Óleo de quadro de sementes pretas (Nigella sativa) tem timoquinona com ação anti-inflamatória comparável a corticosteroides em estudos in vitro. Índice comedogênico 2. Aplicado à noite em áreas inflamadas pode acelerar a remissão.'},
+  {icon:'🫙',msg:'Regra de ouro para diluição de óleos essenciais: 1% para rosto (6 gotas por 30ml de carreador), 2-3% para corpo, nunca mais que 5% em qualquer formulação cosmética caseira. Mais concentrado não é mais eficaz — é mais arriscado.'},
+  {icon:'🔬',msg:'Patch test obrigatório para qualquer óleo essencial novo: 1 gota diluída no antebraço interno, aguardar 24h. Reação = evitar. Óleos essenciais são concentrados biologicamente ativos — sensibilização pode ser permanente.'},
+  {icon:'🌱',msg:'Óleos essenciais fotossensibilizantes (bergamota, limão, laranja, grapefruit, angélica) nunca devem ser usados antes da exposição solar. O dano é irreversível e se manifesta como manchas escuras que demoram anos para sumir.'},
+  {icon:'💧',msg:'Óleos essenciais NÃO se dissolvem em água — não adicione em sprays ou tônicos aquosos sem um emulsificante. Ficam flutuando e podem irritar quando aplicados em alta concentração local. Sempre dilua em óleo carreador primeiro.'},
 ];
+
 
 let dicaIdx = new Date().getDate() % DICAS.length;
 function mostrarDicaDoDia() {
@@ -1104,6 +1235,7 @@ function trocarDica() {
 // ════════════════════════════════
 window.addEventListener('load', () => {
   mostrarDicaDoDia();
+  carregarGatilhosCustom();
   const hoje = new Date().toISOString().split('T')[0];
   document.getElementById('data-input').value = hoje;
   // date change
@@ -1150,6 +1282,7 @@ function resetForm() {
   document.getElementById('foto-input').value = '';
   ['obs-pele','obs-cabelo','novidade'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('resultado').style.display = 'none';
+  resetGatilhosCustomSelecionados();
   ['outro-manha','outro-noite','outro-cabelo'].forEach(id => {
     document.getElementById(id).classList.remove('open');
     document.getElementById(id).previousElementSibling.textContent = '＋ Adicionar outro produto';
@@ -1227,6 +1360,12 @@ async function salvarRegistro() {
     window._getDocs = getDocs;
     document.getElementById('firebase-status').textContent = '🟢 Firebase conectado';
     document.getElementById('firebase-status').style.color = '#5E9E8A';
+    // Re-run after Firebase connects so widget gets real data
+    if (typeof carregarHistorico === 'function') carregarHistorico();
+    if (typeof carregarGatilhosCustom === 'function') carregarGatilhosCustom();
+    const hoje = new Date().toISOString().split('T')[0];
+    const dataAtual = document.getElementById('data-input')?.value || hoje;
+    if (typeof carregarDia === 'function') carregarDia(dataAtual);
   } catch(e) {
     document.getElementById('firebase-status').textContent = '🔴 Modo local ativo';
     document.getElementById('firebase-status').style.color = '#D4724A';
